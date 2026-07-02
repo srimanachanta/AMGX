@@ -15,11 +15,13 @@ target_include_directories(amgx_libs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../inclu
 
 set(AMGX_INCLUDES ../include)
 
+if(AMGX_BUILD_TESTS)
+
 set(tests_all ${tests_all} testframework.cu test_utils.cu unit_test.cu)
 
 add_library(amgx_tests_libs OBJECT ${tests_all})
 
-target_include_directories(amgx_tests_libs PRIVATE ${AMGX_INCLUDES}) 
+target_include_directories(amgx_tests_libs PRIVATE ${AMGX_INCLUDES})
 
 add_library(amgx_tests_library STATIC $<TARGET_OBJECTS:amgx_tests_libs>)
 
@@ -38,7 +40,7 @@ target_compile_options(amgx_tests_launcher PUBLIC $<$<COMPILE_LANGUAGE:CUDA>: ${
 target_compile_options(amgx_tests_libs PUBLIC $<$<COMPILE_LANGUAGE:CUDA>: ${CUDA_NVCC_FLAGS} >)
 target_compile_options(amgx_tests_library PUBLIC $<$<COMPILE_LANGUAGE:CUDA>: ${CUDA_NVCC_FLAGS} >)
 
-target_include_directories(amgx_tests_launcher PRIVATE ${AMGX_INCLUDES}) 
+target_include_directories(amgx_tests_launcher PRIVATE ${AMGX_INCLUDES})
 
 # create executables for host and device, scalar and block version
 
@@ -59,11 +61,15 @@ if(NOT ${CMAKE_BUILD_TYPE} MATCHES "Release")
   install(TARGETS amgx_tests_launcher DESTINATION "lib/tests")
 endif(NOT ${CMAKE_BUILD_TYPE} MATCHES "Release")
 
+endif(AMGX_BUILD_TESTS)
+
 #copy configs to build directory
 add_custom_target(copy_configs ALL)
 add_custom_command(TARGET copy_configs COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/configs" "${CMAKE_BINARY_DIR}/configs")
 
-install(FILES 
+if(AMGX_INSTALL)
+
+install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/configs/AGGREGATION_DILU.json"
     "${CMAKE_CURRENT_SOURCE_DIR}/configs/AGGREGATION_GS.json"
     "${CMAKE_CURRENT_SOURCE_DIR}/configs/AGGREGATION_JACOBI.json"
@@ -106,4 +112,6 @@ install(FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/configs/eigen_configs/POWER_ITERATION"
     "${CMAKE_CURRENT_SOURCE_DIR}/configs/eigen_configs/SUBSPACE_ITERATION"
     DESTINATION "lib/configs/eigen_configs")
+
+endif(AMGX_INSTALL)
 

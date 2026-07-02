@@ -46,6 +46,21 @@ endif()
 # the project
 project (AMG LANGUAGES C CXX CUDA)
 
+# Read the release version so the shared library can carry SONAME/version metadata
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/ReleaseVersion.txt" AMGX_VERSION LIMIT_COUNT 1)
+string(STRIP "${AMGX_VERSION}" AMGX_VERSION)
+string(REGEX MATCH "^[0-9]+" AMGX_VERSION_MAJOR "${AMGX_VERSION}")
+
+# Build-shaping options. Defaults preserve upstream behavior; a downstream consumer
+# (e.g. a Python extension linking only the AMGX C API) turns tests/examples/static off.
+option(AMGX_BUILD_TESTS           "Build AMGX unit-test targets"                 ON)
+option(AMGX_BUILD_EXAMPLES        "Build AMGX example executables"               ON)
+option(AMGX_BUILD_STATIC          "Build the static amgx library"                ON)
+option(AMGX_BUILD_SHARED          "Build the shared amgxsh library"              ON)
+option(AMGX_HIDE_INTERNAL_SYMBOLS "Export only the AMGX_* C API from the shared library" ON)
+option(AMGX_STRIP_RELEASE         "Strip + gc-sections the shared library in Release" ON)
+option(AMGX_INSTALL               "Generate AMGX install rules (headers/libs/configs)" ON)
+
 find_package(MPI)
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake" ${CMAKE_MODULE_PATH})
@@ -65,12 +80,16 @@ ENDIF(NOT CMAKE_BUILD_TYPE)
 
 find_package(CUDAToolkit 12.0 REQUIRED)
 
-# CUDA 13.1+ requires C++17 for Thrust and CUDA C++ Core Libraries
-if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL "13.1")
-  message(STATUS "CUDA ${CUDAToolkit_VERSION} detected, setting C++17 standard")
-  set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard" FORCE)
+# AMGX requires at least C++17 (CUDA >= 13.1 Thrust / CUDA C++ Core Libraries). The per-target
+# minimum is requested via target_compile_features(amgx_libs ...) below so that, when AMGX is
+# added as a subdirectory, a parent project that already selected a newer standard (e.g. C++20)
+# is never downgraded. Only seed a default here for standalone builds, and never FORCE it.
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
-  set(CMAKE_CUDA_STANDARD 17 CACHE STRING "CUDA C++ standard" FORCE)
+endif()
+if(NOT CMAKE_CUDA_STANDARD)
+  set(CMAKE_CUDA_STANDARD 17)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
 
@@ -95,6 +114,13 @@ if(CMAKE_COMPILER_IS_GNUCXX)
     # we throw in ~Matrix(), we assume any error fatal so std::terminate call is ok
     set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -Wno-terminate)
   endif()
+endif()
+
+# C++20 deprecates arithmetic between two different enum types; AMGX and the Thrust/CUB it uses
+# do this pervasively, so silence it to avoid flooding a C++20 (e.g. downstream) build. The flag
+# is recognized and harmless under C++17. Forwarded to nvcc via -Xcompiler ${CMAKE_CXX_FLAGS}.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -Wno-deprecated-enum-enum-conversion)
 endif()
 
 set(CMAKE_C_FLAGS_PROFILE "${CMAKE_C_FLAGS_RELEASE}" CACHE STRING "" FORCE)
@@ -203,7 +229,17 @@ GET_FILENAME_COMPONENT(CMAKE_C_COMPILER_NAME "${CMAKE_C_COMPILER}" NAME)
 IF(CMAKE_C_COMPILER_NAME MATCHES cl AND NOT CMAKE_C_COMPILER_NAME MATCHES clang)
     set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 ELSE(CMAKE_C_COMPILER_NAME MATCHES cl AND NOT CMAKE_C_COMPILER_NAME MATCHES clang)
-    set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -rdynamic -fPIC -fvisibility=default)
+    # Place each function/datum in its own section so the linker can --gc-sections away
+    # anything unreferenced. -rdynamic is intentionally omitted: it force-exports every symbol
+    # into the dynamic table, which defeats stripping and hidden visibility.
+    set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -fPIC -ffunction-sections -fdata-sections)
+    if(AMGX_HIDE_INTERNAL_SYMBOLS)
+      # Only the AMGX_* C API is tagged visibility("default") in amgx_c.h, so hiding everything
+      # else exports just the public C API from amgxsh and lets more internal code be pruned.
+      set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -fvisibility=hidden -fvisibility-inlines-hidden)
+    else()
+      set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -fvisibility=default)
+    endif()
 ENDIF(CMAKE_C_COMPILER_NAME MATCHES cl AND NOT CMAKE_C_COMPILER_NAME MATCHES clang)
 
 # VS: include object files in target property SOURCES
@@ -236,6 +272,17 @@ set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -DTHRUST_CUB_WRAPPED_NAMESPACE=amgx)
 
 add_library(amgx_libs OBJECT "")
 
+# Request C++17 as a minimum without downgrading a parent project's newer standard (see above).
+target_compile_features(amgx_libs PUBLIC cxx_std_17 cuda_std_17)
+
+# The test targets (built in src/) link amgx and amgxsh, and the examples link both as well.
+if(AMGX_BUILD_TESTS AND NOT (AMGX_BUILD_STATIC AND AMGX_BUILD_SHARED))
+  message(FATAL_ERROR "AMGX_BUILD_TESTS requires both AMGX_BUILD_STATIC and AMGX_BUILD_SHARED")
+endif()
+if(AMGX_BUILD_EXAMPLES AND NOT (AMGX_BUILD_STATIC AND AMGX_BUILD_SHARED))
+  message(FATAL_ERROR "AMGX_BUILD_EXAMPLES requires both AMGX_BUILD_STATIC and AMGX_BUILD_SHARED")
+endif()
+
 add_subdirectory("src")
 
 # CMAKE_CUDA_ARCHITECTURES automatically applies to all CUDA targets
@@ -243,44 +290,72 @@ add_subdirectory("src")
 
 target_compile_options(amgx_libs PUBLIC $<$<COMPILE_LANGUAGE:CUDA>: ${CUDA_NVCC_FLAGS} >)
 
-# build amgx
-add_library(amgx STATIC $<TARGET_OBJECTS:amgx_libs>)  # static lib
-target_link_libraries(amgx amgx_libs)
+if(AMGX_INSTALL)
+  install(FILES
+    include/amgx_config.h
+    include/amgx_c.h
+    DESTINATION include)
+endif(AMGX_INSTALL)
 
-add_library(amgxsh SHARED $<TARGET_OBJECTS:amgx_libs>)  # shared lib
-target_link_libraries(amgxsh amgx_libs)
+# build static amgx
+if(AMGX_BUILD_STATIC)
+  add_library(amgx STATIC $<TARGET_OBJECTS:amgx_libs>)  # static lib
+  add_library(AMGX::amgx ALIAS amgx)
+  target_link_libraries(amgx amgx_libs)
+  set_target_properties(amgx PROPERTIES LINKER_LANGUAGE CUDA)
+  target_compile_options(amgx PUBLIC $<$<COMPILE_LANGUAGE:CUDA>: ${CUDA_NVCC_FLAGS} >)
 
-set_target_properties(amgx PROPERTIES LINKER_LANGUAGE CUDA)
-set_target_properties(amgxsh PROPERTIES LINKER_LANGUAGE CUDA)
+  IF (WIN32)
+    target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver)
+  ELSE (WIN32)
+    target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver m pthread)
+  ENDIF(WIN32)
 
-target_compile_options(amgx PUBLIC $<$<COMPILE_LANGUAGE:CUDA>: ${CUDA_NVCC_FLAGS} >)
-target_compile_options(amgxsh PUBLIC $<$<COMPILE_LANGUAGE:CUDA>: ${CUDA_NVCC_FLAGS} >)
+  if(MPI_FOUND)
+    target_link_libraries(amgx MPI::MPI_CXX)
+  endif(MPI_FOUND)
 
-IF (WIN32)
-  target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver)
-  target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver)
-ELSE (WIN32)
-  target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver m pthread)
-  target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver m pthread)
-ENDIF(WIN32)
+  if(AMGX_INSTALL)
+    install(TARGETS amgx DESTINATION "lib")
+  endif(AMGX_INSTALL)
+endif(AMGX_BUILD_STATIC)
 
-if(MPI_FOUND)
-    target_link_libraries(amgx   MPI::MPI_CXX)
+# build shared amgxsh
+if(AMGX_BUILD_SHARED)
+  add_library(amgxsh SHARED $<TARGET_OBJECTS:amgx_libs>)  # shared lib
+  add_library(AMGX::amgxsh ALIAS amgxsh)
+  target_link_libraries(amgxsh amgx_libs)
+  set_target_properties(amgxsh PROPERTIES
+    LINKER_LANGUAGE CUDA
+    VERSION "${AMGX_VERSION}"
+    SOVERSION "${AMGX_VERSION_MAJOR}")
+  target_compile_options(amgxsh PUBLIC $<$<COMPILE_LANGUAGE:CUDA>: ${CUDA_NVCC_FLAGS} >)
+
+  IF (WIN32)
+    target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver)
+  ELSE (WIN32)
+    target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver m pthread)
+    # Drop unreferenced sections and stop re-exporting symbols pulled in from the static
+    # CUDA libraries (cublas/cusparse/...) so only the AMGX_* C API remains in the export table.
+    target_link_options(amgxsh PRIVATE -Wl,--gc-sections -Wl,--exclude-libs,ALL)
+    if(AMGX_STRIP_RELEASE)
+      target_link_options(amgxsh PRIVATE $<$<CONFIG:Release>:-Wl,--strip-all>)
+    endif()
+  ENDIF(WIN32)
+
+  if(MPI_FOUND)
     target_link_libraries(amgxsh MPI::MPI_CXX)
-endif(MPI_FOUND)
+  endif(MPI_FOUND)
+
+  if(AMGX_INSTALL)
+    install(TARGETS amgxsh DESTINATION "lib")
+  endif(AMGX_INSTALL)
+endif(AMGX_BUILD_SHARED)
 
 # CMAKE_CUDA_ARCHITECTURES is inherited by all targets automatically
 
-install(FILES
-  include/amgx_config.h
-  include/amgx_c.h
-  DESTINATION include)
-
-install(TARGETS amgx   DESTINATION "lib")
-install(TARGETS amgxsh DESTINATION "lib")
-
-#export(TARGETS amgxsh FILE ${CMAKE_CURRENT_SOURCE_DIR}/amgxsh.cmake)
-
 # build examples
-add_subdirectory(examples)
+if(AMGX_BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif(AMGX_BUILD_EXAMPLES)
 
