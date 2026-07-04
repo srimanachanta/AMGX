@@ -113,11 +113,15 @@ void CG_Flex_CycleDispatcher<t_vecPrec, t_matPrec, t_indPrec>::dispatch( AMG_Cla
  * Explict instantiations
  ***************************************/
 template class CG_Flex_CycleDispatcher<AMGX_vecDouble, AMGX_matDouble, AMGX_indInt>;
+#ifndef AMGX_NO_MIXED_PRECISION
 template class CG_Flex_CycleDispatcher<AMGX_vecFloat, AMGX_matFloat, AMGX_indInt>;
 template class CG_Flex_CycleDispatcher<AMGX_vecDouble, AMGX_matFloat, AMGX_indInt>;
+#endif
 
+#ifndef AMGX_NO_COMPLEX
 template class CG_Flex_CycleDispatcher<AMGX_vecComplex, AMGX_matComplex, AMGX_indInt>;
 template class CG_Flex_CycleDispatcher<AMGX_vecDoubleComplex, AMGX_matComplex, AMGX_indInt>;
 template class CG_Flex_CycleDispatcher<AMGX_vecDoubleComplex, AMGX_matDoubleComplex, AMGX_indInt>;
+#endif
 
 } // namespace amgx

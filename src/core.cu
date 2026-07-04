@@ -585,6 +585,50 @@ struct registerClasses<T_Config, false>
     // temporary header in order to not instantiate not implemented algorithms on complex data
     static void register_it()
     {
+#ifdef AMGX_MINIMAL_SOLVERS
+        // cunibs keep-set only: PCG + aggregation-AMG (SIZE_2 / LOW_DEG / V-cycle) with
+        // a JACOBI_L1 smoother and a DENSE_LU coarse solve. Everything else (other Krylov
+        // solvers, smoothers, eigensolvers, classical/energymin AMG, extra cycles/selectors)
+        // is excluded from the build entirely (see src/CMakeLists.txt). Matrix coloring,
+        // convergence and scaler factories are kept because the AMG/aggregation path may
+        // request one of them at runtime.
+        MatrixIO<T_Config>::registerReader("MatrixMarket", ReadMatrixMarket<T_Config>::readMatrixMarket);
+        MatrixIO<T_Config>::registerReader("MatrixNVAMG", ReadMatrixMarket<T_Config>::readMatrixMarketV2);
+        MatrixIO<T_Config>::registerReader("NVAMGBinary", ReadNVAMGBinary<T_Config>::read);
+        MatrixIO<T_Config>::registerWriter("matrixmarket", MatrixIO<T_Config>::writeSystemMatrixMarket);
+        MatrixIO<T_Config>::registerWriter("binary", MatrixIO<T_Config>::writeSystemBinary);
+        SolverFactory<T_Config>::registerFactory("AMG", new AlgebraicMultigrid_SolverFactory<T_Config>);
+        SolverFactory<T_Config>::registerFactory("PCG", new PCG_SolverFactory<T_Config>);
+        SolverFactory<T_Config>::registerFactory("JACOBI_L1", new JacobiL1SolverFactory<T_Config>);
+        // BLOCK_JACOBI is the registered default fine_smoother/coarse_smoother, so keep it
+        // even though cunibs overrides amg:smoother=JACOBI_L1.
+        SolverFactory<T_Config>::registerFactory("BLOCK_JACOBI", new block_jacobi_solver::BlockJacobiSolverFactory<T_Config>);
+        SolverFactory<T_Config>::registerFactory("DENSE_LU_SOLVER", new dense_lu_solver::DenseLUSolverFactory<T_Config>);
+        SolverFactory<T_Config>::registerFactory("NOSOLVER", new Dummy_SolverFactory<T_Config>);
+        AMG_LevelFactory<T_Config>::registerFactory(AGGREGATION, new Aggregation_AMG_LevelFactory<T_Config>);
+        CycleFactory<T_Config>::registerFactory("V", new V_CycleFactory<T_Config>);
+        aggregation::SelectorFactory<T_Config>::registerFactory("SIZE_2", new aggregation::size2_selector::Size2SelectorFactory<T_Config>);
+        aggregation::CoarseAGeneratorFactory<T_Config>::registerFactory("LOW_DEG", new aggregation::LowDegCoarseAGeneratorFactory<T_Config>);
+        MatrixColoringFactory<T_Config>::registerFactory("MIN_MAX", new MinMaxMatrixColoringFactory<T_Config>);
+        MatrixColoringFactory<T_Config>::registerFactory("MIN_MAX_2RING", new Min_Max_2Ring_Matrix_Coloring_Factory<T_Config>);
+        MatrixColoringFactory<T_Config>::registerFactory("PARALLEL_GREEDY", new Parallel_Greedy_Matrix_Coloring_Factory<T_Config>);
+        MatrixColoringFactory<T_Config>::registerFactory("ROUND_ROBIN", new RoundRobinMatrixColoringFactory<T_Config>);
+        MatrixColoringFactory<T_Config>::registerFactory("MULTI_HASH", new MultiHashMatrixColoringFactory<T_Config>);
+        MatrixColoringFactory<T_Config>::registerFactory("UNIFORM", new UniformMatrixColoringFactory<T_Config>);
+        MatrixColoringFactory<T_Config>::registerFactory("GREEDY_MIN_MAX_2RING", new Greedy_Min_Max_2Ring_Matrix_Coloring_Factory<T_Config>);
+        MatrixColoringFactory<T_Config>::registerFactory("SERIAL_GREEDY_BFS", new Serial_Greedy_BFS_MatrixColoring_Factory<T_Config>);
+        MatrixColoringFactory<T_Config>::registerFactory("GREEDY_RECOLOR", new Greedy_Recolor_MatrixColoring_Factory<T_Config>);
+        MatrixColoringFactory<T_Config>::registerFactory("LOCALLY_DOWNWIND", new LocallyDownwindColoringFactory<T_Config>);
+        ConvergenceFactory<T_Config>::registerFactory("ABSOLUTE", new AbsoluteConvergenceFactory<T_Config>);
+        ConvergenceFactory<T_Config>::registerFactory("RELATIVE_INI_CORE", new RelativeIniConvergenceFactory<T_Config>);
+        ConvergenceFactory<T_Config>::registerFactory("RELATIVE_MAX_CORE", new RelativeMaxConvergenceFactory<T_Config>);
+        ConvergenceFactory<T_Config>::registerFactory("RELATIVE_INI", new RelativeIniConvergenceFactory<T_Config>);
+        ConvergenceFactory<T_Config>::registerFactory("RELATIVE_MAX", new RelativeMaxConvergenceFactory<T_Config>);
+        ConvergenceFactory<T_Config>::registerFactory("COMBINED_REL_INI_ABS", new RelativeAbsoluteCombinedConvergenceFactory<T_Config>);
+        ScalerFactory<T_Config>::registerFactory("DIAGONAL_SYMMETRIC", new DiagonalSymmetricScalerFactory<T_Config>);
+        ScalerFactory<T_Config>::registerFactory("BINORMALIZATION", new BinormalizationScalerFactory<T_Config>);
+        ScalerFactory<T_Config>::registerFactory("NBINORMALIZATION", new NBinormalizationScalerFactory<T_Config>);
+#else
         //Register Data Formats
         MatrixIO<T_Config>::registerReader("MatrixMarket", ReadMatrixMarket<T_Config>::readMatrixMarket);
         MatrixIO<T_Config>::registerReader("MatrixNVAMG", ReadMatrixMarket<T_Config>::readMatrixMarketV2);
@@ -687,6 +731,7 @@ struct registerClasses<T_Config, false>
         ScalerFactory<T_Config>::registerFactory("DIAGONAL_SYMMETRIC", new DiagonalSymmetricScalerFactory<T_Config>);
         ScalerFactory<T_Config>::registerFactory("BINORMALIZATION", new BinormalizationScalerFactory<T_Config>);
         ScalerFactory<T_Config>::registerFactory("NBINORMALIZATION", new NBinormalizationScalerFactory<T_Config>);
+#endif
     };
 };
 

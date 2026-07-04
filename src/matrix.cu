@@ -1214,8 +1214,10 @@ void reorderElementsDeviceCSR(INDEX_TYPE num_rows,
 // explicitly instantiate reorderElementsDeviceCSR, since we call it from header and it's not a part of some class
 template void reorderElementsDeviceCSR(INDEX_TYPE num_rows, INDEX_TYPE *row_offsets, INDEX_TYPE *permutation, INDEX_TYPE *col_indices, float *values, INDEX_TYPE block_size);
 template void reorderElementsDeviceCSR(INDEX_TYPE num_rows, INDEX_TYPE *row_offsets, INDEX_TYPE *permutation, INDEX_TYPE *col_indices, double *values, INDEX_TYPE block_size);
+#ifndef AMGX_NO_COMPLEX
 template void reorderElementsDeviceCSR(INDEX_TYPE num_rows, INDEX_TYPE *row_offsets, INDEX_TYPE *permutation, INDEX_TYPE *col_indices, cuComplex *values, INDEX_TYPE block_size);
 template void reorderElementsDeviceCSR(INDEX_TYPE num_rows, INDEX_TYPE *row_offsets, INDEX_TYPE *permutation, INDEX_TYPE *col_indices, cuDoubleComplex *values, INDEX_TYPE block_size);
+#endif
 
 
 /****************************************

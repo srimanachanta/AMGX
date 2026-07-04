@@ -256,6 +256,9 @@ AMGX_FORALL_BUILDS(AMGX_CASE_LINE)
 AMGX_FORCOMPLEX_BUILDS(AMGX_CASE_LINE)
 #undef AMGX_CASE_LINE
 
+// The non-V cycles are stripped in a minimal (cunibs) build; guard their FixedCycle
+// instantiations so w/f/cg/cg_flex_cycle.cu can be excluded from the build.
+#ifndef AMGX_MINIMAL_SOLVERS
 #define AMGX_CASE_LINE(CASE) template class FixedCycle<TemplateMode<CASE>::Type, W_CycleDispatcher>;
 AMGX_FORALL_BUILDS(AMGX_CASE_LINE)
 AMGX_FORCOMPLEX_BUILDS(AMGX_CASE_LINE)
@@ -275,4 +278,5 @@ AMGX_FORCOMPLEX_BUILDS(AMGX_CASE_LINE)
 AMGX_FORALL_BUILDS(AMGX_CASE_LINE)
 AMGX_FORCOMPLEX_BUILDS(AMGX_CASE_LINE)
 #undef AMGX_CASE_LINE
+#endif
 } // namespace amgx

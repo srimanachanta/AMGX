@@ -207,6 +207,7 @@ struct ReadAndConvert<TReal, TComplex, PartVec, false>
                                , unsigned int props
                                , const PartVec &rank_rows)
     {
+#ifndef AMGX_NO_COMPLEX
         AMG_Config tcfg;
         Matrix<TComplex> Ac;
         Vector<TComplex> xc, bc;
@@ -635,6 +636,9 @@ struct ReadAndConvert<TReal, TComplex, PartVec, false>
             info << "Converted complex matrix " << nrows << "x" << nrows << " with " << nnz << " nonzeros to the (2x2) block-ERF - using K" << conversion_type - 220 << " formulation." << std::endl;
             std::cout << info.str();
         }
+#else
+        FatalError("Complex conversion is not available in this build (AMGX_NO_COMPLEX)", AMGX_ERR_IO);
+#endif
     }
 };
 

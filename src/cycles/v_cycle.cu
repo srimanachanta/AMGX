@@ -23,11 +23,15 @@ void V_CycleDispatcher<t_vecPrec, t_matPrec, t_indPrec>::dispatch( AMG_Class *am
  * Explict instantiations
  ***************************************/
 template class V_CycleDispatcher<AMGX_vecDouble, AMGX_matDouble, AMGX_indInt>;
+#ifndef AMGX_NO_MIXED_PRECISION
 template class V_CycleDispatcher<AMGX_vecFloat, AMGX_matFloat, AMGX_indInt>;
 template class V_CycleDispatcher<AMGX_vecDouble, AMGX_matFloat, AMGX_indInt>;
+#endif
 
+#ifndef AMGX_NO_COMPLEX
 template class V_CycleDispatcher<AMGX_vecComplex, AMGX_matComplex, AMGX_indInt>;
 template class V_CycleDispatcher<AMGX_vecDoubleComplex, AMGX_matComplex, AMGX_indInt>;
 template class V_CycleDispatcher<AMGX_vecDoubleComplex, AMGX_matDoubleComplex, AMGX_indInt>;
+#endif
 } // namespace amgx
 

@@ -153,6 +153,13 @@ typedef enum
   codeLineMacro(AMGX_mode_dIDI)\
   codeLineMacro(AMGX_mode_dIFI)
 
+/* Complex builds are emitted unconditionally by default. Defining AMGX_NO_COMPLEX
+   collapses every AMGX_FORCOMPLEX_BUILDS_* expansion to nothing, dropping all
+   complex-valued template instantiations (and their device code) from the build. */
+#ifdef AMGX_NO_COMPLEX
+#define AMGX_FORCOMPLEX_BUILDS_DEVICE(codeLineMacro)
+#define AMGX_FORCOMPLEX_BUILDS_HOST(codeLineMacro)
+#else
 #define AMGX_FORCOMPLEX_BUILDS_DEVICE(codeLineMacro)\
   codeLineMacro(AMGX_mode_dZZI)\
   codeLineMacro(AMGX_mode_dZCI)\
@@ -162,6 +169,7 @@ typedef enum
   codeLineMacro(AMGX_mode_hZZI)\
   codeLineMacro(AMGX_mode_hZCI)\
   codeLineMacro(AMGX_mode_hCCI)
+#endif
 
 /* Builds for device and host */
 #define AMGX_FORALL_BUILDS(codeLineMacro)\

@@ -61,6 +61,24 @@ option(AMGX_HIDE_INTERNAL_SYMBOLS "Export only the AMGX_* C API from the shared 
 option(AMGX_STRIP_RELEASE         "Strip + gc-sections the shared library in Release" ON)
 option(AMGX_INSTALL               "Generate AMGX install rules (headers/libs/configs)" ON)
 
+# Size-shaping options. Defaults preserve upstream behavior (all modes/solvers).
+# A downstream consumer that needs only one precision mode and a fixed solver set
+# (e.g. a Python extension pinned to dDDI + PCG/AMG) can slash the device fatbin
+# without dropping any CUDA architecture.
+option(AMGX_ENABLE_COMPLEX "Compile complex-valued precision modes" ON)
+# AMGX instantiates three real precision combos (double-double, double-float,
+# float-float) for its AMG/cycle machinery via hardcoded explicit instantiations,
+# independent of the FORALL mode list. When OFF, only the double-double (matDouble)
+# variants are built. This MUST accompany a double-only mode restriction
+# (AMGX_BUILD_DEVICE_MODE=AMGX_mode_dDDI / AMGX_BUILD_HOST_MODE=AMGX_mode_hDDI),
+# otherwise the FORALL side would emit float modes with no matching hardcoded roots.
+option(AMGX_ENABLE_MIXED_PRECISION "Compile the double-float and float-float AMG precision variants" ON)
+option(AMGX_MINIMAL_SOLVERS "Compile only the solvers/eigensolvers in the minimal keep-set" OFF)
+set(AMGX_BUILD_DEVICE_MODE "" CACHE STRING
+    "Restrict the device build to a single mode, e.g. AMGX_mode_dDDI (empty = all)")
+set(AMGX_BUILD_HOST_MODE "" CACHE STRING
+    "Restrict the host build to a single mode, e.g. AMGX_mode_hDDI (empty = all)")
+
 find_package(MPI)
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake" ${CMAKE_MODULE_PATH})
@@ -274,6 +292,30 @@ add_library(amgx_libs OBJECT "")
 
 # Request C++17 as a minimum without downgrading a parent project's newer standard (see above).
 target_compile_features(amgx_libs PUBLIC cxx_std_17 cuda_std_17)
+
+# Size-shaping definitions must be visible to every translation unit (config.h is
+# included everywhere), so apply them PUBLIC on the object library that feeds both
+# the static and shared targets. Keeping them consistent avoids ODR/link mismatch.
+if(AMGX_BUILD_DEVICE_MODE)
+  target_compile_definitions(amgx_libs PUBLIC AMGX_build_device=${AMGX_BUILD_DEVICE_MODE})
+  message(STATUS "AMGX: restricting device build to ${AMGX_BUILD_DEVICE_MODE}")
+endif()
+if(AMGX_BUILD_HOST_MODE)
+  target_compile_definitions(amgx_libs PUBLIC AMGX_build_host=${AMGX_BUILD_HOST_MODE})
+  message(STATUS "AMGX: restricting host build to ${AMGX_BUILD_HOST_MODE}")
+endif()
+if(NOT AMGX_ENABLE_COMPLEX)
+  target_compile_definitions(amgx_libs PUBLIC AMGX_NO_COMPLEX)
+  message(STATUS "AMGX: complex precision modes disabled")
+endif()
+if(NOT AMGX_ENABLE_MIXED_PRECISION)
+  target_compile_definitions(amgx_libs PUBLIC AMGX_NO_MIXED_PRECISION)
+  message(STATUS "AMGX: mixed/single (float) precision variants disabled")
+endif()
+if(AMGX_MINIMAL_SOLVERS)
+  target_compile_definitions(amgx_libs PUBLIC AMGX_MINIMAL_SOLVERS)
+  message(STATUS "AMGX: compiling minimal solver keep-set only")
+endif()
 
 # The test targets (built in src/) link amgx and amgxsh, and the examples link both as well.
 if(AMGX_BUILD_TESTS AND NOT (AMGX_BUILD_STATIC AND AMGX_BUILD_SHARED))

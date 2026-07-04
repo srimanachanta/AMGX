@@ -1552,13 +1552,17 @@ void AMG<t_vecPrec, t_matPrec, t_indPrec>::printConnections()
  ***************************************/
 // real valued case
 template class AMG<AMGX_vecDouble, AMGX_matDouble, AMGX_indInt>;
+#ifndef AMGX_NO_MIXED_PRECISION
 template class AMG<AMGX_vecFloat, AMGX_matFloat, AMGX_indInt>;
 template class AMG<AMGX_vecDouble, AMGX_matFloat, AMGX_indInt>;
+#endif
 
 // complex valued case
+#ifndef AMGX_NO_COMPLEX
 template class AMG<AMGX_vecComplex, AMGX_matComplex, AMGX_indInt>;
 template class AMG<AMGX_vecDoubleComplex, AMGX_matComplex, AMGX_indInt>;
 template class AMG<AMGX_vecDoubleComplex, AMGX_matDoubleComplex, AMGX_indInt>;
+#endif
 
 } // namespace amgx
 

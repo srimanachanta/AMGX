@@ -9,6 +9,34 @@ FILE(GLOB_RECURSE SRCS "*.cu")
 list(FILTER SRCS EXCLUDE REGEX "/src/tests/")
 list(FILTER SRCS EXCLUDE REGEX "/utest.cu")
 
+if(AMGX_MINIMAL_SOLVERS)
+  # cunibs keep-set: PCG + aggregation-AMG (SIZE_2 / LOW_DEG / V-cycle) + JACOBI_L1
+  # smoother + DENSE_LU coarse solve. Exclude everything else from the build to cut
+  # both binary size and compile time. The matching factory registrations are
+  # #ifdef AMGX_MINIMAL_SOLVERS-guarded in core.cu, and the extra FixedCycle
+  # instantiations are guarded in cycles/fixed_cycle.cu, so no dangling references remain.
+  list(FILTER SRCS EXCLUDE REGEX "/eigensolvers/")
+  list(FILTER SRCS EXCLUDE REGEX "/amg_eigensolver\\.cu$")
+  list(FILTER SRCS EXCLUDE REGEX "/amgx_eig_c\\.cu$")
+  # Classical/energymin AMG: strip the concrete selectors/interpolators/strength/levels
+  # but KEEP the factory base files (selector.cu / interpolator.cu / strength.cu /
+  # em_interpolator.cu / em_selector.cu). core.cu's config machinery (getAll*, unregister)
+  # only calls the factory base methods, so the bases must remain; the concretes are unused
+  # by the aggregation path and their unvalidated parameter defaults are never read.
+  list(FILTER SRCS EXCLUDE REGEX "/classical/classical_amg_level\\.cu$")
+  list(FILTER SRCS EXCLUDE REGEX "/classical/interpolators/(common|distance1|distance2|multipass)\\.cu$")
+  list(FILTER SRCS EXCLUDE REGEX "/classical/selectors/(aggressive_hmis|aggressive_pmis|cr|dummy_selector|hmis|pmis|rs)\\.cu$")
+  list(FILTER SRCS EXCLUDE REGEX "/classical/strength/(affinity|strength_base)\\.cu$")
+  list(FILTER SRCS EXCLUDE REGEX "/energymin/energymin_amg_level\\.cu$")
+  list(FILTER SRCS EXCLUDE REGEX "/energymin/interpolators/em\\.cu$")
+  list(FILTER SRCS EXCLUDE REGEX "/cycles/(w|f|cg|cg_flex)_cycle\\.cu$")
+  list(FILTER SRCS EXCLUDE REGEX "/aggregation/selectors/(size4_selector|size8_selector|multi_pairwise|geo_selector|parallel_greedy_selector)\\.cu$")
+  list(FILTER SRCS EXCLUDE REGEX "/aggregation/coarseAgenerators/(hybrid|thrust)_coarse_A_generator\\.cu$")
+  # block_jacobi_solver is kept: it is the registered default fine_smoother/coarse_smoother.
+  list(FILTER SRCS EXCLUDE REGEX "/solvers/(cheb_solver|gmres_solver|fgmres_solver|bicgstab_solver|pbicgstab_solver|cg_solver|pcgf_solver|idr_solver|idrmsync_solver|cf_jacobi_solver|gauss_seidel_solver|fixcolor_gauss_seidel_solver|multicolor_gauss_seidel_solver|multicolor_ilu_solver|multicolor_dilu_solver|polynomial_solver|kpz_polynomial_solver|chebyshev_poly|kaczmarz_solver|user_solver)\\.cu$")
+  message(STATUS "AMGX: minimal solver set - excluded eigensolvers, classical/energymin AMG, unused Krylov/smoothers, extra cycles/selectors")
+endif()
+
 target_sources(amgx_libs PRIVATE ${SRCS})
 
 target_include_directories(amgx_libs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../include)
