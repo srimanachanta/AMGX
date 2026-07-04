@@ -10,7 +10,6 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <curand.h>
 #include <solvers/block_common_solver.h>
 
 namespace amgx

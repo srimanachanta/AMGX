@@ -19,7 +19,6 @@
 #include <thrust/host_vector.h>
 #include <cusp/detail/format_utils.h> //offsets_to_indices
 #include <determinism_checker.h>
-#include <curand.h>
 
 namespace amgx
 {
@@ -126,18 +125,6 @@ AdaptiveSelectorBase<T_Config>::AdaptiveSelectorBase(AMG_Config &cfg, const std:
 {
     smoother = SolverFactory<T_Config>::allocate( cfg, cfg_scope, "smoother" );
 }
-/*
-template <typename ValueType>
-void curandGenerateUniformWrapper( curandGenerator_t generator, ValueType *outputPtr, size_t num );
-template<> void curandGenerateUniformWrapper<float>( curandGenerator_t generator, float *outputPtr, size_t num )
-{
-    curandGenerateUniform( generator, outputPtr, num);
-}
-template<> void curandGenerateUniformWrapper<double>( curandGenerator_t generator, double *outputPtr, size_t num )
-{
-    curandGenerateUniformDouble( generator, outputPtr, num);
-}
-*/
 
 template<class T_Config>
 void AdaptiveSelectorBase<T_Config>::setAggregates(Matrix<T_Config> &A,
@@ -164,11 +151,6 @@ void AdaptiveSelectorBase<T_Config>::setAggregates(Matrix<T_Config> &A,
 
             // initialize rhs
             thrust_wrapper::fill( rhs.begin(), rhs.end(), 0.0 );
-
-            //compute random numbers
-            curandGenerator_t generator;
-            curandCreateGenerator(&generator, CURAND_RNG_PSEUDO_DEFAULT);
-            curandGenerateUniformWrapper(generator, x.raw(), numRows);
 
             cudaStream_t str = 0;
             const int threads_per_block = 256;
