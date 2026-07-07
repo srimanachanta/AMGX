@@ -980,20 +980,25 @@ void Cusparse::bsrmv_internal( const int color,
 }
 
 // Simple custom implementation of matrix-vector product that has only 1 kernel.
-template<unsigned UNROLL, class T>
+// Matrix values (MatType) and vectors (VecType) may differ: for dDFI the matrix is
+// float and the vectors/accumulator are double. cuSPARSE's generic SpMV cannot express
+// this combination (it requires the matrix and X vector to share a type), so this custom
+// kernel is the mixed-precision path -- it reads the float matrix but accumulates in the
+// (wider) vector precision.
+template<unsigned UNROLL, class MatType, class VecType>
 __global__ void csrmv(
     int nrows,
-    const T alpha,
-    const T* __restrict__ csrVal,
+    const VecType alpha,
+    const MatType* __restrict__ csrVal,
     const int* __restrict__ csrRow,
     const int* __restrict__ csrCol,
-    const T* __restrict__ x,
-    const T beta,
-    T* __restrict__ y)
+    const VecType* __restrict__ x,
+    const VecType beta,
+    VecType* __restrict__ y)
 {
     for(int i = threadIdx.x + blockIdx.x*blockDim.x; i < nrows; i += blockDim.x*gridDim.x)
     {
-        T y_tmp = amgx::types::util<T>::get_zero();
+        VecType y_tmp = amgx::types::util<VecType>::get_zero();
 
         int row_b = csrRow[i];
         int row_e = csrRow[i+1];
@@ -1012,7 +1017,7 @@ __global__ void csrmv(
         }
 
         // Don't read y unnecessarily
-        if(amgx::types::util<T>::is_zero(beta))
+        if(amgx::types::util<VecType>::is_zero(beta))
         {
             y[i] = y_tmp;
         }
@@ -1023,10 +1028,87 @@ __global__ void csrmv(
     }
 }
 
+// Vectorized mixed-precision CSR SpMV: THREADS_PER_ROW cooperate on each row so matrix reads are
+// coalesced within a row (unlike the scalar csrmv above, whose consecutive threads stride across
+// unrelated rows). The (float) matrix is loaded and accumulated in the (wider) vector precision.
+// Used for dDFI (float matrix, double vectors), which cuSPARSE cannot express. THREADS_PER_ROW
+// must divide the warp so each row-group stays within one warp; the partial sums are reduced in
+// shared memory (type-generic, so this also compiles for the complex vector types) with a fixed
+// tree, keeping results run-to-run reproducible (determinism_flag). Launch with blockDim.x <= 512.
+template<int THREADS_PER_ROW, class MatType, class VecType>
+__global__ void csrmv_vec(
+    int nrows,
+    const VecType alpha,
+    const MatType* __restrict__ csrVal,
+    const int* __restrict__ csrRow,
+    const int* __restrict__ csrCol,
+    const VecType* __restrict__ x,
+    const VecType beta,
+    VecType* __restrict__ y)
+{
+    __shared__ VecType sdata[512];
+    const int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    const int row = tid / THREADS_PER_ROW;
+    const int lane = threadIdx.x % THREADS_PER_ROW;
+
+    VecType sum = amgx::types::util<VecType>::get_zero();
+    if (row < nrows)
+    {
+        const int row_b = csrRow[row];
+        const int row_e = csrRow[row + 1];
+        for (int c = row_b + lane; c < row_e; c += THREADS_PER_ROW)
+        {
+            sum = sum + csrVal[c] * x[csrCol[c]];
+        }
+    }
+
+    // Segmented reduction across the THREADS_PER_ROW lanes of each (warp-contained) row-group.
+    // Real precisions use warp shuffles; complex vector types (no __shfl overload) fall back to a
+    // shared-memory tree. Both are fixed-order, so results are run-to-run reproducible.
+    VecType total;
+    if constexpr (std::is_same<VecType, float>::value || std::is_same<VecType, double>::value)
+    {
+#pragma unroll
+        for (int off = THREADS_PER_ROW / 2; off > 0; off >>= 1)
+        {
+            sum = sum + __shfl_down_sync(0xffffffffu, sum, off, THREADS_PER_ROW);
+        }
+        total = sum;
+    }
+    else
+    {
+        sdata[threadIdx.x] = sum;
+        __syncwarp();
+#pragma unroll
+        for (int off = THREADS_PER_ROW / 2; off > 0; off >>= 1)
+        {
+            if (lane < off)
+            {
+                sdata[threadIdx.x] = sdata[threadIdx.x] + sdata[threadIdx.x + off];
+            }
+            __syncwarp();
+        }
+        total = sdata[threadIdx.x];
+    }
+
+    if (row < nrows && lane == 0)
+    {
+        const VecType res = alpha * total;
+        if (amgx::types::util<VecType>::is_zero(beta))
+        {
+            y[row] = res;
+        }
+        else
+        {
+            y[row] = beta * y[row] + res;
+        }
+    }
+}
+
 template<class MatType, class VecType, class IndType>
 inline void generic_SpMV(cusparseHandle_t handle, cusparseOperation_t trans,
                              int mb, int nb, int nnzb, int rowOff,
-                             const MatType *alpha,
+                             const VecType *alpha,
                              const MatType *val,
                              const IndType *rowPtr,
                              const IndType *colInd,
@@ -1040,12 +1122,27 @@ inline void generic_SpMV(cusparseHandle_t handle, cusparseOperation_t trans,
     constexpr int cta_size = 128;
     const int sm_count = getSMCount();
 
-    // Assuming that csrmv will be more efficient than cuSPARSE for row counts 
+    // cuSPARSE's generic SpMV requires the matrix and X vector to share a data type, so a
+    // mixed matrix/vector precision (dDFI: float matrix, double vectors) must go through the
+    // custom kernel below rather than cusparseSpMV.
+    const bool mixed_precision = (matType != vecType);
+
+    // Assuming that csrmv will be more efficient than cuSPARSE for row counts
     // that are lower than the 3 times the total number of threads
     // cuSPARSE does not like the offsetting required when latency hiding
-    // it's possible to reverse the offsets, but requires extra kernel invocation 
+    // it's possible to reverse the offsets, but requires extra kernel invocation
     // and usually the dependent part of the call is smaller
-    if(rowOff > 0 || mb < cta_size * sm_count * 3)
+    if(mixed_precision)
+    {
+        // Float matrix, double vectors: cuSPARSE can't express this, so use the vectorized
+        // custom kernel. THREADS_PER_ROW=4 suits the ~15-25 nnz/row of P1 FEM stiffness matrices
+        // (enough work per thread to amortise the reduction without serialising long rows).
+        constexpr int threads_per_row = 4;
+        int nblocks = (mb * threads_per_row + cta_size - 1) / cta_size;
+        csrmv_vec<threads_per_row><<<nblocks, cta_size>>>(mb, *alpha, val, rowPtr, colInd, x, *beta, y);
+        cudaCheckError();
+    }
+    else if(rowOff > 0 || mb < cta_size * sm_count * 3)
     {
         // Custom single-kernel SpMV, we could actually determine unroll factor
         // more accurately here by checking non-zeros per row
@@ -1179,18 +1276,22 @@ inline void Cusparse::bsrmv( cusparseHandle_t handle, cusparseDirection_t dir, c
                              double *y,
                              const cudaStream_t& stream)
 {
-    #if 0
-        // Run cuSparse on selected stream
-        cusparseCheckError(cusparseSetStream(handle, stream));
+    // Mixed precision (dDFI): float matrix, double vectors. cuSPARSE cannot express this
+    // combination, so generic_SpMV routes it through the custom mixed-type csrmv kernel.
+    // Run cuSparse on selected stream
+    cusparseCheckError(cusparseSetStream(handle, stream));
 
-        const double *d_bsrVal = reinterpret_cast<const double *>(const_cast<float *>(bsrVal)); // this works due to private API call in the matrix initialization which sets cusparse matrix description in the half precision mode
-        cusparseCheckError(cusparseDbsrxmv(handle, dir, trans, mb, mb, nb, nnzb, alpha, descr, d_bsrVal, bsrMaskPtr, bsrRowPtr, bsrRowPtr + 1, bsrColInd, blockDim, x, beta, y));
+    if (blockDim == 1)
+    {
+        generic_SpMV(handle, trans, mb, nb, nnzb, rowOff, alpha, bsrVal, bsrRowPtr, bsrColInd, x, beta, y, CUDA_R_32F, CUDA_R_64F, stream);
+    }
+    else
+    {
+        FatalError("Mixed-precision block (blockDim > 1) bsrmv is not supported.", AMGX_ERR_NOT_IMPLEMENTED);
+    }
 
-        // Reset cuSparse to default stream
-        cusparseCheckError(cusparseSetStream(handle, 0));
-    #else
-        FatalError("Mixed precision modes not currently supported for CUDA 10.1 or later.", AMGX_ERR_NOT_IMPLEMENTED);
-    #endif
+    // Reset cuSparse to default stream
+    cusparseCheckError(cusparseSetStream(handle, 0));
 }
 
 // Custom implementation of matrix-vector product to replace the original bsrxmv,

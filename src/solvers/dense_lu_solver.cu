@@ -574,6 +574,27 @@ void DenseLUSolver<TemplateConfig<AMGX_device, V, M, I> >::cudense_getrf()
 template< AMGX_VecPrecision V, AMGX_MatPrecision M, AMGX_IndPrecision I >
 void DenseLUSolver<TemplateConfig<AMGX_device, V, M, I> >::cudense_getrs( Vector_d &x )
 {
+    // The dense factors (m_dense_A) are stored in the matrix precision Matrix_data, so the
+    // triangular solve must run in that precision. For homogeneous modes (dDDI/dFFI) the RHS
+    // vector already has that precision and is solved in place. For mixed precision (dDFI:
+    // float matrix, double vectors) the double RHS/solution must be converted to Matrix_data
+    // around the solve -- reinterpreting the double buffer as float (the previous behaviour)
+    // fed garbage to cuSolver and destroyed the coarse correction.
+    Matrix_data *rhs_ptr;
+    MVector_d rhs_tmp;
+    const bool mixed = !std::is_same<Vector_data, Matrix_data>::value;
+    if (mixed)
+    {
+        rhs_tmp.resize(m_num_rows);
+        amgx::thrust::copy(x.begin(), x.begin() + m_num_rows, rhs_tmp.begin());
+        cudaCheckError();
+        rhs_ptr = rhs_tmp.raw();
+    }
+    else
+    {
+        rhs_ptr = (Matrix_data *)(x.raw());
+    }
+
     //Solve L*X = RHS
     cusolverStatus_t status = cusolverDnXgetrs(m_cuds_handle,
                               CUBLAS_OP_N,
@@ -582,13 +603,19 @@ void DenseLUSolver<TemplateConfig<AMGX_device, V, M, I> >::cudense_getrs( Vector
                               m_dense_A,
                               m_lda,
                               m_ipiv,
-                              (Matrix_data *)(x.raw()),
+                              rhs_ptr,
                               m_num_rows,
                               m_cuds_info);
 
     if (status != CUSOLVER_STATUS_SUCCESS)
     {
         FatalError( "cuSolver trsv failed to solve Lx=rhs", AMGX_ERR_INTERNAL);
+    }
+
+    if (mixed)
+    {
+        amgx::thrust::copy(rhs_tmp.begin(), rhs_tmp.begin() + m_num_rows, x.begin());
+        cudaCheckError();
     }
 
     cudaCheckError();
