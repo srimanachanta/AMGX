@@ -124,7 +124,13 @@ typedef enum
 } AMGX_Mode;
 
 /* Builds for host */
-#ifdef AMGX_build_host
+#ifdef AMGX_build_host_none
+#define AMGX_FORALL_BUILDS_HOST(codeLineMacro)
+#elif defined(AMGX_build_host_hDDI_hFFI)
+#define AMGX_FORALL_BUILDS_HOST(codeLineMacro)\
+  codeLineMacro(AMGX_mode_hDDI)\
+  codeLineMacro(AMGX_mode_hFFI)
+#elif defined(AMGX_build_host)
 #define AMGX_FORALL_BUILDS_HOST(codeLineMacro)\
   codeLineMacro(AMGX_build_host)
 #else
@@ -139,7 +145,11 @@ typedef enum
   codeLineMacro(AMGX_mode_hIFI)
 
 /* Builds for device */
-#ifdef AMGX_build_device
+#ifdef AMGX_build_device_dDDI_dFFI
+#define AMGX_FORALL_BUILDS_DEVICE(codeLineMacro)\
+  codeLineMacro(AMGX_mode_dDDI)\
+  codeLineMacro(AMGX_mode_dFFI)
+#elif defined(AMGX_build_device)
 #define AMGX_FORALL_BUILDS_DEVICE(codeLineMacro)\
   codeLineMacro(AMGX_build_device)
 #else
