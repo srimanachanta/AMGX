@@ -586,7 +586,7 @@ struct registerClasses<T_Config, false>
     static void register_it()
     {
 #ifdef AMGX_MINIMAL_SOLVERS
-        // cunibs keep-set only: PCG + aggregation-AMG (SIZE_2 / LOW_DEG / V-cycle) with
+        // cunibs keep-set only: PCG + aggregation-AMG (SIZE_2 / SIZE_4 / LOW_DEG / V-cycle) with
         // a JACOBI_L1 smoother and a DENSE_LU coarse solve. Everything else (other Krylov
         // solvers, smoothers, eigensolvers, classical/energymin AMG, extra cycles/selectors)
         // is excluded from the build entirely (see src/CMakeLists.txt). Matrix coloring,
@@ -608,6 +608,7 @@ struct registerClasses<T_Config, false>
         AMG_LevelFactory<T_Config>::registerFactory(AGGREGATION, new Aggregation_AMG_LevelFactory<T_Config>);
         CycleFactory<T_Config>::registerFactory("V", new V_CycleFactory<T_Config>);
         aggregation::SelectorFactory<T_Config>::registerFactory("SIZE_2", new aggregation::size2_selector::Size2SelectorFactory<T_Config>);
+        aggregation::SelectorFactory<T_Config>::registerFactory("SIZE_4", new aggregation::size4_selector::Size4SelectorFactory<T_Config>);
         aggregation::CoarseAGeneratorFactory<T_Config>::registerFactory("LOW_DEG", new aggregation::LowDegCoarseAGeneratorFactory<T_Config>);
         MatrixColoringFactory<T_Config>::registerFactory("MIN_MAX", new MinMaxMatrixColoringFactory<T_Config>);
         MatrixColoringFactory<T_Config>::registerFactory("MIN_MAX_2RING", new Min_Max_2Ring_Matrix_Coloring_Factory<T_Config>);

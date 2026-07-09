@@ -10,7 +10,7 @@ list(FILTER SRCS EXCLUDE REGEX "/src/tests/")
 list(FILTER SRCS EXCLUDE REGEX "/utest.cu")
 
 if(AMGX_MINIMAL_SOLVERS)
-  # cunibs keep-set: PCG + aggregation-AMG (SIZE_2 / LOW_DEG / V-cycle) + JACOBI_L1
+  # cunibs keep-set: PCG + aggregation-AMG (SIZE_2 / SIZE_4 / LOW_DEG / V-cycle) + JACOBI_L1
   # smoother + DENSE_LU coarse solve. Exclude everything else from the build to cut
   # both binary size and compile time. The matching factory registrations are
   # #ifdef AMGX_MINIMAL_SOLVERS-guarded in core.cu, and the extra FixedCycle
@@ -30,7 +30,8 @@ if(AMGX_MINIMAL_SOLVERS)
   list(FILTER SRCS EXCLUDE REGEX "/energymin/energymin_amg_level\\.cu$")
   list(FILTER SRCS EXCLUDE REGEX "/energymin/interpolators/em\\.cu$")
   list(FILTER SRCS EXCLUDE REGEX "/cycles/(w|f|cg|cg_flex)_cycle\\.cu$")
-  list(FILTER SRCS EXCLUDE REGEX "/aggregation/selectors/(size4_selector|size8_selector|multi_pairwise|geo_selector|parallel_greedy_selector)\\.cu$")
+  # size4_selector is kept: SIZE_4 coarsens faster, for a cheaper V-cycle preconditioner apply.
+  list(FILTER SRCS EXCLUDE REGEX "/aggregation/selectors/(size8_selector|multi_pairwise|geo_selector|parallel_greedy_selector)\\.cu$")
   list(FILTER SRCS EXCLUDE REGEX "/aggregation/coarseAgenerators/(hybrid|thrust)_coarse_A_generator\\.cu$")
   # block_jacobi_solver is kept: it is the registered default fine_smoother/coarse_smoother.
   list(FILTER SRCS EXCLUDE REGEX "/solvers/(cheb_solver|gmres_solver|fgmres_solver|bicgstab_solver|pbicgstab_solver|cg_solver|pcgf_solver|idr_solver|idrmsync_solver|cf_jacobi_solver|gauss_seidel_solver|fixcolor_gauss_seidel_solver|multicolor_gauss_seidel_solver|multicolor_ilu_solver|multicolor_dilu_solver|polynomial_solver|kpz_polynomial_solver|chebyshev_poly|kaczmarz_solver|user_solver)\\.cu$")
