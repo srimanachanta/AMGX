@@ -22,6 +22,7 @@
 #include "distributed/distributed_arranger.h"
 #include "distributed/distributed_io.h"
 #include "resources.h"
+#include "global_thread_handle.h"
 #include "matrix_distribution.h"
 #include <amgx_timer.h>
 #include "util.h"
@@ -1110,7 +1111,10 @@ inline AMGX_RC vector_upload(AMGX_vector_handle vec,
     else
     {
         v.resize(n * block_dim);
-        cudaMemcpy(v.raw(), data, sizeof(ValueTypeB) * n * block_dim, cudaMemcpyDefault);
+        // Async on the thread's AMGx stream so a device-pointer upload does not block the host or
+        // serialize on the null stream (lets the mixed-precision PCG hand off without a sync).
+        cudaMemcpyAsync(v.raw(), data, sizeof(ValueTypeB) * n * block_dim, cudaMemcpyDefault,
+                        amgx::memory::get_stream());
         cudaCheckError();
     }
 
@@ -1198,13 +1202,17 @@ inline AMGX_RC vector_download_impl(const AMGX_vector_handle vec,
         }
         else
         {
-            cudaMemcpy((ValueTypeB *)data, v.raw(), n * block_dimy * sizeof(ValueTypeB), cudaMemcpyDefault);
+            cudaMemcpyAsync((ValueTypeB *)data, v.raw(), n * block_dimy * sizeof(ValueTypeB),
+                            cudaMemcpyDefault, amgx::memory::get_stream());
             cudaCheckError();
         }
     }
     else
     {
-        cudaMemcpy((ValueTypeB *)data, v.raw(), v.size() * sizeof(ValueTypeB), cudaMemcpyDefault);
+        // Async on the thread's AMGx stream: the result stays ordered with the caller's downstream
+        // work on the same stream, so apply() no longer blocks the host on a device-pointer download.
+        cudaMemcpyAsync((ValueTypeB *)data, v.raw(), v.size() * sizeof(ValueTypeB),
+                        cudaMemcpyDefault, amgx::memory::get_stream());
         cudaCheckError();
     }
 
@@ -3744,6 +3752,16 @@ extern "C" {
         nvtxRange nvrf(__func__);
 
         return AMGX_pin_memory_impl(ptr, bytes);
+    }
+
+    // Bind the calling thread's AMGx work to a caller-owned CUDA stream (0 = default). Used by the
+    // mixed-precision solve to route the AMGx preconditioner apply onto the app stream so its (now
+    // async) upload/download stay ordered without a per-apply host sync.
+    AMGX_RC AMGX_API AMGX_set_thread_stream(void *stream)
+    {
+        nvtxRange nvrf(__func__);
+        amgx::memory::setStream(getCurrentThreadId(), (cudaStream_t)stream);
+        return AMGX_RC_OK;
     }
 
     AMGX_RC AMGX_unpin_memory_impl(void *ptr)

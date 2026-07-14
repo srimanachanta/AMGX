@@ -112,7 +112,7 @@ cusolverStatus_t cusolverDnXgetrs(cusolverDnHandle_t handle,
                                   int ldb,
                                   int *devInfo )
 {
-    return cusolverDnSgetrs(handle, trans, n, 1, A, lda, devIpiv, B, ldb, devInfo );
+    return cusolverDnSgetrs(handle, trans, n, nrhs, A, lda, devIpiv, B, ldb, devInfo );
 }
 
 cusolverStatus_t cusolverDnXgetrs(cusolverDnHandle_t handle,
@@ -126,7 +126,7 @@ cusolverStatus_t cusolverDnXgetrs(cusolverDnHandle_t handle,
                                   int ldb,
                                   int *devInfo )
 {
-    return cusolverDnDgetrs(handle, trans, n, 1, A, lda, devIpiv, B, ldb, devInfo );
+    return cusolverDnDgetrs(handle, trans, n, nrhs, A, lda, devIpiv, B, ldb, devInfo );
 }
 
 cusolverStatus_t cusolverDnXgetrs(cusolverDnHandle_t handle,
@@ -140,7 +140,7 @@ cusolverStatus_t cusolverDnXgetrs(cusolverDnHandle_t handle,
                                   int ldb,
                                   int *devInfo )
 {
-    return cusolverDnCgetrs(handle, trans, n, 1, A, lda, devIpiv, B, ldb, devInfo );
+    return cusolverDnCgetrs(handle, trans, n, nrhs, A, lda, devIpiv, B, ldb, devInfo );
 }
 
 cusolverStatus_t cusolverDnXgetrs(cusolverDnHandle_t handle,
@@ -154,7 +154,7 @@ cusolverStatus_t cusolverDnXgetrs(cusolverDnHandle_t handle,
                                   int ldb,
                                   int *devInfo )
 {
-    return cusolverDnZgetrs(handle, trans, n, 1, A, lda, devIpiv, B, ldb, devInfo );
+    return cusolverDnZgetrs(handle, trans, n, nrhs, A, lda, devIpiv, B, ldb, devInfo );
 }
 
 } // namespace amgx

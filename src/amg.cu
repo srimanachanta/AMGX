@@ -1101,20 +1101,19 @@ class AMG_Solve
 
         static void solve_iteration( AMG_Class *amg, Vector_hd &b, Vector_hd &x)
         {
-            cudaStreamSynchronize(0);
-            cudaCheckError();
+            // The per-apply null-stream barriers that upstream brackets this with are dropped: cuNIBS
+            // drives AMGx single-GPU on a caller-owned stream and owns the ordering, so they were pure
+            // host stalls (and blocked CUDA-graph capture of the V-cycle apply).
             nvtxRange amg_si("amg_solve_iteration");
             MemorySpace memorySpaceTag;
             AMG_Level<TConfig_hd> *fine = amg->getFinestLevel( memorySpaceTag );
             assert(fine != NULL);
             CycleFactory<TConfig>::generate( amg, fine, b, x );
             fine->unsetInitCycle();
-            // Note: this sometimes takes too much time on host making GPU idle. 
+            // Note: this sometimes takes too much time on host making GPU idle.
             // Solve is not that important for memory - main mem usage comes from setup.
             // Disabling this call for now
             //MemoryInfo::updateMaxMemoryUsage();
-            cudaStreamSynchronize(0);
-            cudaCheckError();
         }
 
 };

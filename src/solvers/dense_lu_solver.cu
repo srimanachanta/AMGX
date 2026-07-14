@@ -46,6 +46,36 @@ namespace dense_lu_solver
 
 enum { WARP_SIZE = 32, CTA_SIZE = 128 };
 
+// Column-major identity fill (lda leading dimension).
+template <typename T>
+__global__ void dense_identity_kernel(T *A, int m, int lda)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < m * m)
+    {
+        int i = idx % m;
+        int j = idx / m;
+        A[i + static_cast<size_t>(j) * lda] = (i == j) ? T(1) : T(0);
+    }
+}
+
+// Capture-safe coarse solve: x = Ainv * rhs (Ainv column-major, lda). The coarse system is
+// tiny (min_coarse_rows), so one thread per output row is ample.
+template <typename T>
+__global__ void dense_ainv_gemv_kernel(const T *Ainv, const T *rhs, T *x, int m, int lda)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < m)
+    {
+        T acc = T(0);
+        for (int j = 0; j < m; ++j)
+        {
+            acc += Ainv[i + static_cast<size_t>(j) * lda] * rhs[j];
+        }
+        x[i] = acc;
+    }
+}
+
 //
 // supporting kernels
 //
@@ -724,6 +754,11 @@ DenseLUSolver<TemplateConfig<AMGX_device, V, M, I> >::~DenseLUSolver()
         amgx::memory::cudaFreeAsync(m_cuds_info);
     }
 
+    if (m_Ainv)
+    {
+        amgx::memory::cudaFreeAsync(m_Ainv);
+    }
+
     cudaCheckError();
 }
 
@@ -918,6 +953,32 @@ solver_setup(bool reuse_matrix_structure)
     }
 
     cudense_getrf(); // do LU factor
+    // DENSE_LU is a direct solver (always converges in one step), so the base Solver::solve's
+    // start-of-solve residual + norm (a thrust reduce -> host D2H, illegal during CUDA-graph
+    // capture) is pointless here. Disable monitoring so the per-apply coarse solve issues no host
+    // sync (see is_residual_needed). No effect on the result.
+    this->m_monitor_residual = false;
+    this->m_monitor_convergence = false;
+    // Precompute the explicit inverse so the per-apply coarse solve is a capture-safe GEMV instead
+    // of the capture-illegal cuSolver getrs. Homogeneous precision only (Vector_data==Matrix_data);
+    // the mixed dDFI path keeps getrs.
+    if (std::is_same<Vector_data, Matrix_data>::value && !m_enable_exact_solve)
+    {
+        cudaStream_t stream = amgx::thrust::global_thread_handle::get_stream();
+        allocMem(m_Ainv, static_cast<size_t>(m_num_cols) * m_lda, false);
+        int total = m_num_rows * m_num_rows;
+        dense_identity_kernel<Matrix_data><<<(total + CTA_SIZE - 1) / CTA_SIZE, CTA_SIZE, 0, stream>>>(
+            m_Ainv, m_num_rows, m_lda);
+        cudaCheckError();
+        // Solve A * Ainv = I (nrhs = m_num_rows) -> Ainv = A^{-1}. cuSolver runs at setup only.
+        cusolverStatus_t st = cusolverDnXgetrs(m_cuds_handle, CUBLAS_OP_N, m_num_rows, m_num_rows,
+                                               m_dense_A, m_lda, m_ipiv, m_Ainv, m_lda, m_cuds_info);
+        if (st != CUSOLVER_STATUS_SUCCESS)
+        {
+            FatalError("cuSolver getrs failed to build coarse inverse", AMGX_ERR_INTERNAL);
+        }
+        cudaCheckError();
+    }
     A->setView(oldView);
 }
 
@@ -999,6 +1060,17 @@ solve_iteration(Vector_d &rhs,
         }
         else
         {
+            if (m_Ainv != nullptr)
+            {
+                // Capture-safe coarse solve: x = Ainv * rhs (no cuSolver getrs in the hot path).
+                cudaStream_t stream = amgx::thrust::global_thread_handle::get_stream();
+                dense_ainv_gemv_kernel<Matrix_data><<<(m_num_rows + CTA_SIZE - 1) / CTA_SIZE, CTA_SIZE, 0, stream>>>(
+                    m_Ainv, rhs.raw(), x.raw(), m_num_rows, m_lda);
+                cudaCheckError();
+                x.dirtybit = 1;
+                A->setView(oldView);
+                return AMGX_ST_CONVERGED;
+            }
             x.copy(rhs);
         }
 

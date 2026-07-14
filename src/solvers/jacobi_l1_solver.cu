@@ -513,7 +513,7 @@ void JacobiL1Solver<TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec>
     int nthreads_per_block = 128;
     int n = num_rows - offset;
     int nblocks = n / nthreads_per_block + 1;
-    jacobi_l1_postsmooth<<<nblocks, nthreads_per_block>>>(n, this->weight, x.raw() + offset, this->m_d.raw() + offset, b.raw() + offset, this->y_tmp.raw() + offset);
+    jacobi_l1_postsmooth<<<nblocks, nthreads_per_block, 0, amgx::thrust::global_thread_handle::get_stream()>>>(n, this->weight, x.raw() + offset, this->m_d.raw() + offset, b.raw() + offset, this->y_tmp.raw() + offset);
 
     cudaCheckError();
 }
@@ -579,7 +579,7 @@ void JacobiL1Solver<TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec>
     int nthreads_per_block = 128;
     int n = num_rows - offset;
     int nblocks = n / nthreads_per_block + 1;
-    jacobi_l1_postsmooth_zero<<<nblocks, nthreads_per_block>>>(n, this->weight, x.raw() + offset, this->m_d.raw() + offset, b.raw() + offset);
+    jacobi_l1_postsmooth_zero<<<nblocks, nthreads_per_block, 0, amgx::thrust::global_thread_handle::get_stream()>>>(n, this->weight, x.raw() + offset, this->m_d.raw() + offset, b.raw() + offset);
     cudaCheckError();
 
     A.setView(oldView);

@@ -446,7 +446,7 @@ void Aggregation_AMG_Level<TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_i
     const IndexType *R_column_indices_ptr = this->m_R_column_indices.raw();
     const ValueTypeB *r_ptr = r.raw();
     ValueTypeB *rr_ptr = rr.raw();
-    restrictResidualKernel <<< num_blocks, block_size>>>(R_row_offsets_ptr, R_column_indices_ptr, r_ptr, rr_ptr, max_threads);
+    restrictResidualKernel <<< num_blocks, block_size, 0, amgx::thrust::global_thread_handle::get_stream()>>>(R_row_offsets_ptr, R_column_indices_ptr, r_ptr, rr_ptr, max_threads);
     cudaCheckError();
 }
 
@@ -688,7 +688,7 @@ void Aggregation_AMG_Level<TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_i
         FatalError("error_scaling=1 is deprecated", AMGX_ERR_NOT_IMPLEMENTED );
     }
 
-    prolongateAndApplyCorrectionKernel <<< num_blocks, block_size>>>(alpha, (int)this->A->get_num_rows(), x_ptr, e_ptr, aggregates_ptr, this->m_num_aggregates);
+    prolongateAndApplyCorrectionKernel <<< num_blocks, block_size, 0, amgx::thrust::global_thread_handle::get_stream()>>>(alpha, (int)this->A->get_num_rows(), x_ptr, e_ptr, aggregates_ptr, this->m_num_aggregates);
     cudaCheckError();
 }
 

@@ -280,7 +280,9 @@ AMGX_ERROR AMG_Solver<T_Config>::solve( Vector<T_Config> &b, Vector<T_Config> &x
     }
 
     AMGX_ERROR e = solver->solve_no_throw( b, x, status, xIsZero );
-    amgx::thrust::global_thread_handle::cudaFreeWait();
+    // Upstream's per-solve null-stream barrier (cudaFreeWait) is dropped: it only drains deferred
+    // frees under the async-free path (USE_CUDAMALLOCASYNC); on cuNIBS's single-GPU stream-ordered
+    // path the caller owns ordering, so it was pure host stall.
 
     if ( m_with_timings )
     {

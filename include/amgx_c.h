@@ -182,6 +182,10 @@ AMGX_RC AMGX_API AMGX_pin_memory
 AMGX_RC AMGX_API AMGX_unpin_memory
 (void *ptr);
 
+/* Bind the calling thread's AMGx work to a caller-owned CUDA stream (0 = default). */
+AMGX_RC AMGX_API AMGX_set_thread_stream
+(void *stream);
+
 AMGX_RC AMGX_API AMGX_install_signal_handler();
 
 AMGX_RC AMGX_API AMGX_reset_signal_handler();

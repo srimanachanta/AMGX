@@ -54,7 +54,10 @@ void Cusparse::bsrmv(
     Vector<TConfig> &y,
     ViewType view )
 {
-    cudaStream_t null_stream = 0;
+    // Route the SpMV onto the current thread stream (get_stream()) instead of the legacy default
+    // stream so it composes with a caller-driven non-default stream and is CUDA-graph-capturable.
+    // Single-GPU only (MPI is not compiled here); the multi-GPU halo paths are unaffected.
+    cudaStream_t null_stream = amgx::thrust::global_thread_handle::get_stream();
 
     // If only COO, add CSR since bsrmv doesn't support COO
     if (A.hasProps(COO) && !A.hasProps(CSR))
@@ -109,7 +112,10 @@ void Cusparse::bsrmv_with_mask(
     const typename TConfig::VecPrec betaConst,
     Vector<TConfig> &y)
 {
-    cudaStream_t null_stream = 0;
+    // Route the SpMV onto the current thread stream (get_stream()) instead of the legacy default
+    // stream so it composes with a caller-driven non-default stream and is CUDA-graph-capturable.
+    // Single-GPU only (MPI is not compiled here); the multi-GPU halo paths are unaffected.
+    cudaStream_t null_stream = amgx::thrust::global_thread_handle::get_stream();
 
     // If only COO, add CSR since bsrmv doesn't support COO
     if (A.hasProps(COO) && !A.hasProps(CSR))
@@ -268,7 +274,10 @@ void Cusparse::bsrmv( const typename TConfig::VecPrec alphaConst,
                       Vector<TConfig> &y,
                       ViewType view )
 {
-    cudaStream_t null_stream = 0;
+    // Route the SpMV onto the current thread stream (get_stream()) instead of the legacy default
+    // stream so it composes with a caller-driven non-default stream and is CUDA-graph-capturable.
+    // Single-GPU only (MPI is not compiled here); the multi-GPU halo paths are unaffected.
+    cudaStream_t null_stream = amgx::thrust::global_thread_handle::get_stream();
 
     // If only COO, add CSR since bsrmv doesn't support COO
     if (A.hasProps(COO) && !A.hasProps(CSR))
@@ -355,7 +364,10 @@ void Cusparse::bsrmv( ColumnColorSelector columnColorSelector,
                       Vector<TConfig> &y,
                       ViewType view )
 {
-    cudaStream_t null_stream = 0;
+    // Route the SpMV onto the current thread stream (get_stream()) instead of the legacy default
+    // stream so it composes with a caller-driven non-default stream and is CUDA-graph-capturable.
+    // Single-GPU only (MPI is not compiled here); the multi-GPU halo paths are unaffected.
+    cudaStream_t null_stream = amgx::thrust::global_thread_handle::get_stream();
 
     // If only COO, add CSR since bsrmv doesn't support COO
     if (A.hasProps(COO) && !A.hasProps(CSR))
@@ -443,7 +455,10 @@ void Cusparse::bsrmv( const int color,
                       Vector<TConfig> &y,
                       ViewType view)
 {
-    cudaStream_t null_stream = 0;
+    // Route the SpMV onto the current thread stream (get_stream()) instead of the legacy default
+    // stream so it composes with a caller-driven non-default stream and is CUDA-graph-capturable.
+    // Single-GPU only (MPI is not compiled here); the multi-GPU halo paths are unaffected.
+    cudaStream_t null_stream = amgx::thrust::global_thread_handle::get_stream();
 
     // If only COO, add CSR since bsrmv doesn't support COO
     if (A.hasProps(COO) && !A.hasProps(CSR))
@@ -1139,7 +1154,7 @@ inline void generic_SpMV(cusparseHandle_t handle, cusparseOperation_t trans,
         // (enough work per thread to amortise the reduction without serialising long rows).
         constexpr int threads_per_row = 4;
         int nblocks = (mb * threads_per_row + cta_size - 1) / cta_size;
-        csrmv_vec<threads_per_row><<<nblocks, cta_size>>>(mb, *alpha, val, rowPtr, colInd, x, *beta, y);
+        csrmv_vec<threads_per_row><<<nblocks, cta_size, 0, stream>>>(mb, *alpha, val, rowPtr, colInd, x, *beta, y);
         cudaCheckError();
     }
     else if(rowOff > 0 || mb < cta_size * sm_count * 3)
@@ -1148,7 +1163,7 @@ inline void generic_SpMV(cusparseHandle_t handle, cusparseOperation_t trans,
         // more accurately here by checking non-zeros per row
         constexpr int unroll_factor = 16;
         int nblocks = mb / cta_size + 1;
-        csrmv<unroll_factor><<<nblocks, cta_size>>>(mb, *alpha, val, rowPtr, colInd, x, *beta, y);
+        csrmv<unroll_factor><<<nblocks, cta_size, 0, stream>>>(mb, *alpha, val, rowPtr, colInd, x, *beta, y);
         cudaCheckError();
     }
     else
@@ -1182,6 +1197,7 @@ inline void generic_SpMV(cusparseHandle_t handle, cusparseOperation_t trans,
             }
         }
 
+        cusparseCheckError(cusparseSetStream(handle, stream));
         cusparseCheckError(cusparseSpMV(handle, trans, alpha, matA_descr, vecX_descr, beta, vecY_descr, matType, spmv_alg, dBuffer) );
 
         cusparseCheckError(cusparseDestroySpMat(matA_descr));

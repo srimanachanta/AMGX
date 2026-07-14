@@ -86,6 +86,9 @@ class DenseLUSolver<TemplateConfig<AMGX_device, V, M, I> >
         virtual void solve_init(Vector_d &b, Vector_d &x, bool xIsZero);
         virtual AMGX_STATUS solve_iteration(Vector_d &b, Vector_d &x, bool xIsZero);
         virtual void solve_finalize(Vector_d &b, Vector_d &x);
+        // Direct solver: the residual is never used. The base Solver::solve otherwise computes it
+        // (an SpMV needing a lazy m_r allocation) which is illegal during CUDA-graph stream capture.
+        virtual bool is_residual_needed() const { return false; }
 
         inline int get_num_rows() const { return m_num_rows; }
         inline int get_lda() const { return m_lda; }
@@ -102,6 +105,11 @@ class DenseLUSolver<TemplateConfig<AMGX_device, V, M, I> >
         int *m_cuds_info;         // host pointer for debug info from getrf()
         Matrix_data *m_trf_wspace; // workspace for trf/trs
         bool m_enable_exact_solve = false;
+        // The per-apply cuSolver getrs is CUDA-graph-capture-illegal, so we precompute the explicit
+        // dense inverse at setup (cuSolver, not captured) and replace the coarse solve with a
+        // capture-safe GEMV x = m_Ainv * rhs (column-major, lda=m_lda). Homogeneous precision only
+        // (Vector_data==Matrix_data); stays null on the mixed dDFI path, which keeps getrs.
+        Matrix_data *m_Ainv = nullptr;
 
         // Cached in the case of an exact coarse solve
         IVector_h nz_all;

@@ -33,7 +33,14 @@ auto amgx_thrust_get_allocator(std::false_type)
 template<class InputIterator>
 auto amgx_thrust_get_allocator(std::true_type)
 {
-    return amgx::thrust::cuda::par_nosync(amgx_thrust_device_allocator<InputIterator>());
+    // Bind device thrust algorithms to the current thread stream (get_stream()) rather than the
+    // legacy default stream. Without .on(...) every wrapped thrust op (fill/scan/gather/transform,
+    // e.g. the coarse-level fill in the V-cycle) runs on stream 0, which (a) races when the caller
+    // drives AMGX from a non-default stream and (b) makes CUDA-graph capture impossible. During
+    // setup no thread stream is bound so get_stream() is 0 (unchanged behavior); during a solve it
+    // is the caller's/AMGX_set_thread_stream's stream.
+    return amgx::thrust::cuda::par_nosync(amgx_thrust_device_allocator<InputIterator>())
+        .on(amgx::memory::getStream());
 }
 
 namespace thrust_wrapper
