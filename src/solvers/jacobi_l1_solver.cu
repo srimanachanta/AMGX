@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include <solvers/jacobi_l1_solver.h>
+#include <device_properties.h>
 #include <solvers/block_common_solver.h>
 #include <thrust/transform.h>
 #include <basic_types.h>
@@ -53,6 +54,45 @@ __global__ void jacobi_l1_postsmooth_zero(
         ValueTypeA d = d_in[i];
         ValueTypeB b = b_in[i];
         x[i] = omega * b / (isNotCloseToZero(d) ? d : epsilon(d));
+    }
+}
+
+// Fuses the postsweep's SpMV (multiply into y_tmp) with the Jacobi update, writing the smoothed
+// iterate to xout instead of round-tripping A*x through memory. Eight threads cooperate per row
+// with a fixed-order shuffle reduction (deterministic; real value types only, which is all this
+// build instantiates). The caller swaps x/xout afterwards.
+template <int TPR, typename IndexType, typename ValueTypeA, typename ValueTypeB>
+__global__ void jacobi_l1_fused_postsmooth(
+    int n, ValueTypeB omega,
+    const IndexType* __restrict__ row_ptr, const IndexType* __restrict__ col_idx,
+    const ValueTypeA* __restrict__ vals,
+    const ValueTypeB* __restrict__ x, const ValueTypeA* __restrict__ d_in,
+    const ValueTypeB* __restrict__ b_in, ValueTypeB* __restrict__ xout)
+{
+    const int row = (blockIdx.x * blockDim.x + threadIdx.x) / TPR;
+    const int lane = threadIdx.x % TPR;
+    ValueTypeB axi = 0;
+
+    if (row < n)
+    {
+        const IndexType row_e = row_ptr[row + 1];
+        for (IndexType c = row_ptr[row] + lane; c < row_e; c += TPR)
+        {
+            axi += vals[c] * __ldg(x + col_idx[c]);
+        }
+    }
+
+#pragma unroll
+    for (int off = TPR / 2; off > 0; off >>= 1)
+    {
+        axi += __shfl_down_sync(0xffffffffu, axi, off, TPR);
+    }
+
+    if (row < n && lane == 0)
+    {
+        ValueTypeA d = d_in[row];
+        d = ValueTypeA(1) / (isNotCloseToZero(d) ? d : epsilon(d));
+        xout[row] = (b_in[row] - axi) * omega * d + x[row];
     }
 }
 
@@ -505,13 +545,33 @@ void JacobiL1Solver<TemplateConfig<AMGX_device, t_vecPrec, t_matPrec, t_indPrec>
     this->y_tmp.set_block_dimx(b.get_block_dimx());
     this->y_tmp.set_block_dimy(b.get_block_dimy());
 
-    multiply(A, x, this->y_tmp, A.getViewExterior());
-
     int offset, num_rows;
     A.getOffsetAndSizeForView(A.getViewExterior(), &offset, &num_rows);
-
-    int nthreads_per_block = 128;
     int n = num_rows - offset;
+    int nthreads_per_block = 128;
+
+    // Single-GPU whole-matrix smooth on the SMALL levels only: fuse the SpMV with the Jacobi
+    // update into y_tmp and swap, skipping the A*x round trip and one launch. Large levels stay
+    // on multiply()'s cuSPARSE ALG2 path, which is measurably faster there than any custom
+    // vector kernel (fusing them was a net loss). The threshold mirrors generic_SpMV's
+    // cuSPARSE-vs-custom cutover. The swap is graph-replay-safe because every level's presweep
+    // uses the zero-initial-guess path, which fully overwrites x — so buffer roles are fixed
+    // within a captured apply and no x state crosses between applies.
+    if (offset == 0 && n == A.get_num_rows() && A.hasProps(CSR) && !A.hasProps(DIAG) &&
+        n < 128 * getSMCount() * 3)
+    {
+        constexpr int tpr = 8;
+        int nblocks = (n * tpr + nthreads_per_block - 1) / nthreads_per_block;
+        jacobi_l1_fused_postsmooth<tpr><<<nblocks, nthreads_per_block, 0, amgx::thrust::global_thread_handle::get_stream()>>>(
+            n, this->weight, A.row_offsets.raw(), A.col_indices.raw(), A.values.raw(),
+            x.raw(), this->m_d.raw(), b.raw(), this->y_tmp.raw());
+        cudaCheckError();
+        x.swap(this->y_tmp);
+        return;
+    }
+
+    multiply(A, x, this->y_tmp, A.getViewExterior());
+
     int nblocks = n / nthreads_per_block + 1;
     jacobi_l1_postsmooth<<<nblocks, nthreads_per_block, 0, amgx::thrust::global_thread_handle::get_stream()>>>(n, this->weight, x.raw() + offset, this->m_d.raw() + offset, b.raw() + offset, this->y_tmp.raw() + offset);
 
