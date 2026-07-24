@@ -60,6 +60,8 @@ class Aggregation_AMG_Level_Base : public AMG_Level<T_Config>
         typedef TemplateConfig<other_memspace, vecPrec, matPrec, indPrec> TConfig1;
         typedef TConfig1 T_Config1;
 
+        const IVector &getAggregatesVector() const { return m_aggregates; }
+
         friend class Aggregation_AMG_Level_Base<TConfig1>;
 
         Aggregation_AMG_Level_Base(AMG_Class *amg, ThreadManager *tmng) : AMG_Level<T_Config>(amg, tmng)

@@ -29,6 +29,10 @@
 #include "reorder_partition.h"
 #include <algorithm>
 #include <solvers/solver.h>
+#include <solvers/algebraic_multigrid_solver.h>
+#include <aggregation/aggregation_amg_level.h>
+#include <amg.h>
+#include <amg_level.h>
 #include <matrix.h>
 #include <vector.h>
 #include <thrust_wrapper.h>
@@ -1978,6 +1982,108 @@ inline void solver_get_iterations_number(AMGX_solver_handle slv, int *n)
 }
 
 template<AMGX_Mode CASE>
+inline AMGX_RC solver_walk_amg_level(AMGX_solver_handle slv, int level_idx,
+                                     AMG_Level<typename TemplateMode<CASE>::Type> **out)
+{
+    typedef typename TemplateMode<CASE>::Type TConfig;
+    typedef typename TConfig::MemSpace MemorySpace;
+    auto *solver = get_mode_object_from<CASE, AMG_Solver, AMGX_solver_handle>(slv);
+    cudaSetDevice(solver->getResources()->getDevice(0));
+    cudaCheckError();
+    auto *amg_solver =
+        dynamic_cast<AlgebraicMultigrid_Solver<TConfig>*>(solver->getSolverObject());
+
+    if (!amg_solver) { return AMGX_RC_BAD_PARAMETERS; }
+
+    AMG_Level<TConfig> *level = amg_solver->getAMG()->getFinestLevel(MemorySpace());
+
+    for (int i = 0; i < level_idx && level != nullptr; ++i)
+    {
+        level = level->getNextLevel(MemorySpace());
+    }
+
+    if (!level) { return AMGX_RC_BAD_PARAMETERS; }
+
+    *out = level;
+    return AMGX_RC_OK;
+}
+
+template<AMGX_Mode CASE>
+inline AMGX_RC solver_get_amg_num_levels(AMGX_solver_handle slv, int *n)
+{
+    typedef typename TemplateMode<CASE>::Type TConfig;
+    typedef typename TConfig::MemSpace MemorySpace;
+    auto *solver = get_mode_object_from<CASE, AMG_Solver, AMGX_solver_handle>(slv);
+    cudaSetDevice(solver->getResources()->getDevice(0));
+    cudaCheckError();
+    auto *amg_solver =
+        dynamic_cast<AlgebraicMultigrid_Solver<TConfig>*>(solver->getSolverObject());
+
+    if (!amg_solver) { return AMGX_RC_BAD_PARAMETERS; }
+
+    AMG_Level<TConfig> *level = amg_solver->getAMG()->getFinestLevel(MemorySpace());
+    int count = 0;
+
+    while (level != nullptr)
+    {
+        ++count;
+        level = level->getNextLevel(MemorySpace());
+    }
+
+    *n = count;
+    return AMGX_RC_OK;
+}
+
+template<AMGX_Mode CASE>
+inline AMGX_RC solver_get_amg_level_dims(AMGX_solver_handle slv, int level_idx,
+                                         int *n_rows, int *n_nz, int *n_coarse)
+{
+    typedef typename TemplateMode<CASE>::Type TConfig;
+    typedef typename TConfig::MemSpace MemorySpace;
+    AMG_Level<TConfig> *level = nullptr;
+    AMGX_RC rc = solver_walk_amg_level<CASE>(slv, level_idx, &level);
+
+    if (rc != AMGX_RC_OK) { return rc; }
+
+    Matrix<TConfig> &A = level->getA();
+    *n_rows = A.get_num_rows();
+    *n_nz = A.get_num_nz();
+    AMG_Level<TConfig> *next = level->getNextLevel(MemorySpace());
+    *n_coarse = (next != nullptr) ? next->getA().get_num_rows() : 0;
+    return AMGX_RC_OK;
+}
+
+template<AMGX_Mode CASE>
+inline AMGX_RC solver_download_amg_aggregates(AMGX_solver_handle slv, int level_idx,
+                                              int *aggregates)
+{
+    typedef typename TemplateMode<CASE>::Type TConfig;
+    AMG_Level<TConfig> *level = nullptr;
+    AMGX_RC rc = solver_walk_amg_level<CASE>(slv, level_idx, &level);
+
+    if (rc != AMGX_RC_OK) { return rc; }
+
+    auto *agg_level = dynamic_cast<aggregation::Aggregation_AMG_Level_Base<TConfig>*>(level);
+
+    if (!agg_level) { return AMGX_RC_BAD_PARAMETERS; }
+
+    const auto &aggs = agg_level->getAggregatesVector();
+    const size_t n_rows = (size_t)level->getA().get_num_rows();
+
+    if (aggs.size() < n_rows) { return AMGX_RC_BAD_PARAMETERS; }
+
+    // cudaMemcpyDefault: destination may be device or host memory (unified addressing);
+    // source is host memory for host-mode builds.
+    if (cudaMemcpy(aggregates, aggs.raw(), n_rows * sizeof(int), cudaMemcpyDefault)
+            != cudaSuccess)
+    {
+        return AMGX_RC_UNKNOWN;
+    }
+
+    return AMGX_RC_OK;
+}
+
+template<AMGX_Mode CASE>
 inline AMGX_RC solver_get_iteration_residual(AMGX_solver_handle slv,
         int it,
         int idx,
@@ -3678,6 +3784,107 @@ extern "C" {
         AMGX_CHECK_API_ERROR(rc, resources)
         return AMGX_RC_OK;
         //return getCAPIerror(rc);
+    }
+
+    AMGX_RC AMGX_API AMGX_solver_get_amg_num_levels(AMGX_solver_handle slv, int *n_levels)
+    {
+        nvtxRange nvrf(__func__);
+
+        Resources *resources = NULL;
+        AMGX_CHECK_API_ERROR_NORSRC(getAMGXerror(getResourcesFromSolverHandle(slv, &resources)))
+        AMGX_ERROR rc = AMGX_OK;
+        AMGX_RC rc0 = AMGX_RC_OK;
+
+        AMGX_TRIES()
+        {
+            AMGX_Mode mode = get_mode_from(slv);
+
+            switch (mode)
+            {
+#define AMGX_CASE_LINE(CASE) case CASE: { \
+          rc0 = solver_get_amg_num_levels<CASE>(slv, n_levels); \
+        } \
+        break;
+                    AMGX_FORALL_BUILDS(AMGX_CASE_LINE)
+                    AMGX_FORCOMPLEX_BUILDS(AMGX_CASE_LINE)
+#undef AMGX_CASE_LINE
+
+                default:
+                    AMGX_CHECK_API_ERROR(AMGX_ERR_BAD_MODE, resources)
+            }
+        }
+
+        AMGX_CATCHES(rc)
+        AMGX_CHECK_API_ERROR(rc, resources)
+        return rc0;
+    }
+
+    AMGX_RC AMGX_API AMGX_solver_get_amg_level_dims(AMGX_solver_handle slv, int level,
+            int *n_rows, int *n_nz, int *n_coarse)
+    {
+        nvtxRange nvrf(__func__);
+
+        Resources *resources = NULL;
+        AMGX_CHECK_API_ERROR_NORSRC(getAMGXerror(getResourcesFromSolverHandle(slv, &resources)))
+        AMGX_ERROR rc = AMGX_OK;
+        AMGX_RC rc0 = AMGX_RC_OK;
+
+        AMGX_TRIES()
+        {
+            AMGX_Mode mode = get_mode_from(slv);
+
+            switch (mode)
+            {
+#define AMGX_CASE_LINE(CASE) case CASE: { \
+          rc0 = solver_get_amg_level_dims<CASE>(slv, level, n_rows, n_nz, n_coarse); \
+        } \
+        break;
+                    AMGX_FORALL_BUILDS(AMGX_CASE_LINE)
+                    AMGX_FORCOMPLEX_BUILDS(AMGX_CASE_LINE)
+#undef AMGX_CASE_LINE
+
+                default:
+                    AMGX_CHECK_API_ERROR(AMGX_ERR_BAD_MODE, resources)
+            }
+        }
+
+        AMGX_CATCHES(rc)
+        AMGX_CHECK_API_ERROR(rc, resources)
+        return rc0;
+    }
+
+    AMGX_RC AMGX_API AMGX_solver_download_amg_aggregates(AMGX_solver_handle slv, int level,
+            int *aggregates)
+    {
+        nvtxRange nvrf(__func__);
+
+        Resources *resources = NULL;
+        AMGX_CHECK_API_ERROR_NORSRC(getAMGXerror(getResourcesFromSolverHandle(slv, &resources)))
+        AMGX_ERROR rc = AMGX_OK;
+        AMGX_RC rc0 = AMGX_RC_OK;
+
+        AMGX_TRIES()
+        {
+            AMGX_Mode mode = get_mode_from(slv);
+
+            switch (mode)
+            {
+#define AMGX_CASE_LINE(CASE) case CASE: { \
+          rc0 = solver_download_amg_aggregates<CASE>(slv, level, aggregates); \
+        } \
+        break;
+                    AMGX_FORALL_BUILDS(AMGX_CASE_LINE)
+                    AMGX_FORCOMPLEX_BUILDS(AMGX_CASE_LINE)
+#undef AMGX_CASE_LINE
+
+                default:
+                    AMGX_CHECK_API_ERROR(AMGX_ERR_BAD_MODE, resources)
+            }
+        }
+
+        AMGX_CATCHES(rc)
+        AMGX_CHECK_API_ERROR(rc, resources)
+        return rc0;
     }
 
     AMGX_RC AMGX_API AMGX_solver_get_iteration_residual(AMGX_solver_handle slv, int it, int idx, double *res)

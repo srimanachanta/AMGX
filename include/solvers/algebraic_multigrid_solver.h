@@ -48,6 +48,8 @@ class AlgebraicMultigrid_Solver: public Solver<T_Config>
 
         void SetThreadManager(ThreadManager *tmng) { m_amg.tmng = tmng; }
 
+        AMG<vecPrec, matPrec, indPrec> *getAMG() { return &m_amg; }
+
         // Destructor
         ~AlgebraicMultigrid_Solver();
 

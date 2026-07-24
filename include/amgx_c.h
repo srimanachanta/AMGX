@@ -411,6 +411,28 @@ AMGX_RC AMGX_API AMGX_solver_get_status
 (AMGX_solver_handle slv,
  AMGX_SOLVE_STATUS *st);
 
+/* cuNIBS extension: export the AMG aggregation hierarchy so the caller can rebuild
+ * the V-cycle operators (Galerkin products, smoother diagonals, coarse inverse)
+ * outside AMGX. Only valid when the solver's top-level algorithm is AMG with an
+ * AGGREGATION level structure. */
+AMGX_RC AMGX_API AMGX_solver_get_amg_num_levels
+(AMGX_solver_handle slv,
+ int *n_levels);
+
+AMGX_RC AMGX_API AMGX_solver_get_amg_level_dims
+(AMGX_solver_handle slv,
+ int level,
+ int *n_rows,
+ int *n_nz,
+ int *n_coarse);
+
+/* Copies the level's fine-row -> aggregate map (n_rows int32 values in
+ * [0, n_coarse)) into caller memory (device or host; unified addressing). */
+AMGX_RC AMGX_API AMGX_solver_download_amg_aggregates
+(AMGX_solver_handle slv,
+ int level,
+ int *aggregates);
+
 AMGX_RC AMGX_API AMGX_solver_calculate_residual_norm
 (AMGX_solver_handle solver,
  AMGX_matrix_handle mtx,
