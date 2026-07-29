@@ -35,7 +35,17 @@ Cusparse::Cusparse() : m_handle(0), m_determinism_flag(false)
 
 Cusparse::~Cusparse()
 {
-    destroy_handle();
+    // s_instance below is a function-local static, so on Windows this runs at DLL_PROCESS_DETACH,
+    // where the CUDA runtime may already be gone. cusparseDestroy would then fail and
+    // cusparseCheckError's FatalError would throw -- out of an implicitly noexcept destructor,
+    // which is std::terminate (observed as STATUS_STACK_BUFFER_OVERRUN). Linux only escapes this
+    // because __cxa_atexit runs handlers in reverse registration order, so this destructor happens
+    // to precede CUDA teardown; the Windows loader offers no such guarantee.
+    //
+    // Drop the handle instead of destroying it: the process is exiting and the driver reclaims it.
+    // Ordinary teardown is unaffected, because Resources::~Resources calls destroy_handle()
+    // explicitly while CUDA is still live, leaving m_handle already 0 by the time we get here.
+    m_handle = 0;
 }
 
 Cusparse &Cusparse::get_instance()
