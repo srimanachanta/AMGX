@@ -12,14 +12,17 @@
 
 // os specific vars
 // windows
-#ifdef WIN32
+// _WIN32, not WIN32: MSVC predefines the former but not the latter, and -Xcompiler=/DWIN32
+// would only ever reach nvcc's host pass, never the device front end. Every AMGX source is
+// a .cu, so guarding on WIN32 sent the device pass down the pthread branch.
+#ifdef _WIN32
 #include <windows.h>
 #include <process.h>
 typedef DWORD _thread_id;
-#else // WIN32
+#else // _WIN32
 #include <pthread.h>
 typedef pthread_t _thread_id;
-#endif // WIN32
+#endif // _WIN32
 
 _thread_id getCurrentThreadId();
 

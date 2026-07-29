@@ -88,8 +88,12 @@ if(${CMAKE_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
   MESSAGE(FATAL_ERROR "Error:  In-place builds are not supported. Please create a separate build directory")
 endif(${CMAKE_BINARY_DIR} STREQUAL ${CMAKE_CURRENT_SOURCE_DIR})
 
-# declare the supported configurations
-set(CMAKE_CONFIGURATION_TYPES "Debug;Release;Profile;RelWithTraces" CACHE STRING "Available Configuration Types" FORCE)
+# declare the supported configurations. Only for a standalone build: FORCEing this
+# rewrites the configuration list a multi-config generator already set up for a parent
+# project that added AMGX as a subdirectory.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(CMAKE_CONFIGURATION_TYPES "Debug;Release;Profile;RelWithTraces" CACHE STRING "Available Configuration Types" FORCE)
+endif()
 
 # make sure a build type has been chosen!!!
 IF(NOT CMAKE_BUILD_TYPE)
@@ -112,7 +116,20 @@ if(NOT CMAKE_CUDA_STANDARD)
 endif()
 
 # update/define the compilation flags.
-IF(WIN32)
+#
+# AMGX historically FORCEd CMAKE_{C,CXX}_FLAGS* into the cache on Windows. Those are
+# global variables, so when AMGX is add_subdirectory()'d the flags leak onto every
+# other target in the project: /MT selects the static CRT, which a CPython extension
+# module must not use; /Zl strips the default-library directives an MSVC object needs
+# to link; and FORCEing the cache discards whatever the toolchain had already chosen.
+# Everything that block genuinely needed is expressed per-target below, so leave the
+# defaults alone. CMAKE_MSVC_RUNTIME_LIBRARY (CMP0091) picks /MD, Windows-MSVC.cmake
+# already supplies /DWIN32 /D_WINDOWS /W3 /GR /EHsc, and CMAKE_*_FLAGS_<CONFIG>_INIT
+# already supplies the optimization flags.
+option(AMGX_OVERRIDE_MSVC_FLAGS
+  "Legacy: FORCE the global MSVC flags (/MT, /Zl) into the cache" OFF)
+
+IF(WIN32 AND AMGX_OVERRIDE_MSVC_FLAGS)
   set(CMAKE_C_FLAGS                "/DWIN32 /D_WINDOWS /W3 /bigobj" CACHE STRING "" FORCE)
   set(CMAKE_C_FLAGS_DEBUG          "/D_DEBUG /Zl /Zi /Ob0 /Od /RTC1" CACHE STRING "" FORCE)
   set(CMAKE_C_FLAGS_MINSIZEREL     "/D_DEBUG /Zl /Zi /Ob0 /Od /RTC1" CACHE STRING "" FORCE)
@@ -124,7 +141,7 @@ IF(WIN32)
   set(CMAKE_CXX_FLAGS_MINSIZEREL     "/D_DEBUG /Zl /Zi /Ob0 /Od /RTC1" CACHE STRING "" FORCE)
   set(CMAKE_CXX_FLAGS_RELEASE        "/MT /O2 /Ob2 /DNDEBUG" CACHE STRING "Force flags. /Zl is used to remove deps" FORCE)
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/MT /O2 /Ob2 /DNDEBUG" CACHE STRING "Force flags. /Zl is used to remove deps" FORCE)
-ENDIF(WIN32)
+ENDIF()
 
 # disabling specific warnings
 if(CMAKE_COMPILER_IS_GNUCXX)
@@ -293,6 +310,22 @@ add_library(amgx_libs OBJECT "")
 # Request C++17 as a minimum without downgrading a parent project's newer standard (see above).
 target_compile_features(amgx_libs PUBLIC cxx_std_17 cuda_std_17)
 
+# What the removed global MSVC flag block was actually needed for, scoped to the target
+# that needs it (see the comment at the top of this file).
+if(MSVC)
+  # NOMINMAX: vector.h pulls in <Windows.h>, whose min/max macros break std::min and
+  # std::max and, through them, Thrust. Upstream only added -DNOMINMAX to the Release
+  # nvcc flags; it has to hold in every configuration and in the device pass too, so it
+  # is a definition rather than a flag.
+  target_compile_definitions(amgx_libs PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+  # /bigobj: several translation units exceed the 65,535-section COFF limit.
+  # /utf-8:  a number of sources carry UTF-8 bytes; without this MSVC decodes them in
+  #          the system ANSI code page.
+  target_compile_options(amgx_libs PRIVATE
+    $<$<COMPILE_LANGUAGE:CXX>:/bigobj;/utf-8>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/bigobj;-Xcompiler=/utf-8>)
+endif()
+
 # Size-shaping definitions must be visible to every translation unit (config.h is
 # included everywhere), so apply them PUBLIC on the object library that feeds both
 # the static and shared targets. Keeping them consistent avoids ODR/link mismatch.
@@ -347,10 +380,12 @@ if(AMGX_BUILD_STATIC)
   set_target_properties(amgx PROPERTIES LINKER_LANGUAGE CUDA)
   target_compile_options(amgx PUBLIC $<$<COMPILE_LANGUAGE:CUDA>: ${CUDA_NVCC_FLAGS} >)
 
+  # CUDA::cudart explicitly: an embedding project may set CMAKE_CUDA_RUNTIME_LIBRARY
+  # to None to control where the runtime comes from, and then nothing else supplies it.
   IF (WIN32)
-    target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver)
+    target_link_libraries(amgx CUDA::cudart CUDA::cublas CUDA::cusparse CUDA::cusolver)
   ELSE (WIN32)
-    target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver m pthread)
+    target_link_libraries(amgx CUDA::cudart CUDA::cublas CUDA::cusparse CUDA::cusolver m pthread)
   ENDIF(WIN32)
 
   if(MPI_FOUND)
@@ -373,10 +408,12 @@ if(AMGX_BUILD_SHARED)
     SOVERSION "${AMGX_VERSION_MAJOR}")
   target_compile_options(amgxsh PUBLIC $<$<COMPILE_LANGUAGE:CUDA>: ${CUDA_NVCC_FLAGS} >)
 
+  # CUDA::cudart explicitly: an embedding project may set CMAKE_CUDA_RUNTIME_LIBRARY
+  # to None to control where the runtime comes from, and then nothing else supplies it.
   IF (WIN32)
-    target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver)
+    target_link_libraries(amgxsh CUDA::cudart CUDA::cublas CUDA::cusparse CUDA::cusolver)
   ELSE (WIN32)
-    target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver m pthread)
+    target_link_libraries(amgxsh CUDA::cudart CUDA::cublas CUDA::cusparse CUDA::cusolver m pthread)
     # Drop unreferenced sections and stop re-exporting symbols pulled in from the static
     # CUDA libraries (cublas/cusparse/...) so only the AMGX_* C API remains in the export table.
     target_link_options(amgxsh PRIVATE -Wl,--gc-sections -Wl,--exclude-libs,ALL)

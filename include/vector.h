@@ -63,6 +63,13 @@ enum ColoringType
 
 #include "vector_thrust_allocator.h"
 
+// At global scope: this used to sit inside namespace amgx below, which declared the whole
+// Win32 API inside the namespace for any translation unit that reached vector.h before
+// something else had already included <windows.h>.
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
 namespace amgx
 {
 
@@ -70,7 +77,6 @@ const int sleep_us = 20;
 
 // usleep for windows
 #ifdef _WIN32
-#include <Windows.h>
 static void usleep(int waitTime)
 {
     LARGE_INTEGER time1;
