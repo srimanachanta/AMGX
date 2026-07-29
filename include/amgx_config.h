@@ -163,6 +163,17 @@ typedef enum
   codeLineMacro(AMGX_mode_dIDI)\
   codeLineMacro(AMGX_mode_dIFI)
 
+/* The DFI (vecDouble/matFloat) hierarchy roots -- AMG<> in amg.cu and the *_CycleDispatcher
+   classes in cycles/ -- reference AMG_Level, Solver, MatrixColoring and friends for both the
+   host and device DFI modes, and those exist only for the modes a FORALL list above expands
+   to. A build list that leaves DFI out must therefore not emit the roots either. Getting this
+   wrong leaves the library with undefined symbols, which a Unix shared object silently
+   accepts and a Windows DLL cannot link at all, so derive the guard from the lists rather
+   than leaving it to the caller to keep in sync. */
+#if defined(AMGX_build_device_dDDI_dFFI) || defined(AMGX_build_host_hDDI_hFFI)
+#define AMGX_NO_DFI_PRECISION 1
+#endif
+
 /* Complex builds are emitted unconditionally by default. Defining AMGX_NO_COMPLEX
    collapses every AMGX_FORCOMPLEX_BUILDS_* expansion to nothing, dropping all
    complex-valued template instantiations (and their device code) from the build. */

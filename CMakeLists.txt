@@ -318,12 +318,14 @@ if(MSVC)
   # nvcc flags; it has to hold in every configuration and in the device pass too, so it
   # is a definition rather than a flag.
   target_compile_definitions(amgx_libs PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-  # /bigobj: several translation units exceed the 65,535-section COFF limit.
-  # /utf-8:  a number of sources carry UTF-8 bytes; without this MSVC decodes them in
-  #          the system ANSI code page.
+  # /bigobj:          several translation units exceed the 65,535-section COFF limit.
+  # /utf-8:           a number of sources carry UTF-8 bytes; without this MSVC decodes
+  #                   them in the system ANSI code page.
+  # /Zc:preprocessor: CCCL hard-errors on MSVC's traditional preprocessor, and CUDA 13
+  #                   routes Thrust and CUB through CCCL.
   target_compile_options(amgx_libs PRIVATE
-    $<$<COMPILE_LANGUAGE:CXX>:/bigobj;/utf-8>
-    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/bigobj;-Xcompiler=/utf-8>)
+    $<$<COMPILE_LANGUAGE:CXX>:/bigobj;/utf-8;/Zc:preprocessor>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/bigobj;-Xcompiler=/utf-8;-Xcompiler=/Zc:preprocessor>)
 endif()
 
 # Size-shaping definitions must be visible to every translation unit (config.h is

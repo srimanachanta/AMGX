@@ -5,8 +5,12 @@
 #pragma once
 
 #ifdef _WIN32
-// For now, on VS10, this is required to avoid a compilation error.
+// For now, on VS10, this is required to avoid a compilation error. Guarded because a
+// build that defines it on the command line -- which is the only way to guarantee it
+// precedes every <windows.h> in the translation unit -- would otherwise warn here.
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #else
 // #include <time.h>

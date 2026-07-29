@@ -29,7 +29,10 @@ void F_CycleDispatcher<t_vecPrec, t_matPrec, t_indPrec>::dispatch( AMG_Class *am
 template class F_CycleDispatcher<AMGX_vecDouble, AMGX_matDouble, AMGX_indInt>;
 #ifndef AMGX_NO_MIXED_PRECISION
 template class F_CycleDispatcher<AMGX_vecFloat, AMGX_matFloat, AMGX_indInt>;
+// Only when a build list above actually includes the DFI modes; see amgx_config.h.
+#ifndef AMGX_NO_DFI_PRECISION
 template class F_CycleDispatcher<AMGX_vecDouble, AMGX_matFloat, AMGX_indInt>;
+#endif
 #endif
 
 #ifndef AMGX_NO_COMPLEX
